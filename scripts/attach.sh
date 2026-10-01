@@ -15,8 +15,8 @@ ALERT_HOOK_INDEX=101
 SOCKET=$(get_tmux_option @greenroom-socket greenroom)
 KEY=$(get_tmux_option @greenroom-key g)
 ROOT_KEY=$(get_tmux_option @greenroom-root-key '')
-NEW_KEY=$(get_tmux_option @greenroom-new-key c)
-MENU_KEY=$(get_tmux_option @greenroom-menu-key G)
+AGENTS_KEY=$(get_tmux_option @greenroom-agents-key c)
+WORKSPACES_KEY=$(get_tmux_option @greenroom-workspaces-key G)
 AGENTS=$(get_tmux_option @greenroom-agents 'claude codex gemini opencode')
 DEFAULT_AGENT=$(get_tmux_option @greenroom-default claude)
 DEFAULT_WORKSPACE=$(sanitize_name "$(get_tmux_option @greenroom-workspace main)")
@@ -113,8 +113,8 @@ mirror_user_options() {
 
 push_state() {
   chain set-option -g @greenroom_key "$KEY"
-  chain set-option -g @greenroom_new_key "$NEW_KEY"
-  chain set-option -g @greenroom_menu_key "$MENU_KEY"
+  chain set-option -g @greenroom_agents_key "$AGENTS_KEY"
+  chain set-option -g @greenroom_workspaces_key "$WORKSPACES_KEY"
   chain set-option -g @greenroom_default "$DEFAULT_AGENT"
 }
 
@@ -145,10 +145,10 @@ push_bindings() {
   [[ $prefix != None ]] && chain_bind prefix "$prefix" send-prefix
   chain_bind prefix "$KEY" detach-client
   [[ -n $ROOT_KEY ]] && chain_bind root "$ROOT_KEY" detach-client
-  chain_bind prefix "$MENU_KEY" run-shell -b \
+  chain_bind prefix "$WORKSPACES_KEY" run-shell -b \
     "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'"
   agent_menu
-  chain_bind prefix "$NEW_KEY" "${AGENT_MENU[@]}"
+  chain_bind prefix "$AGENTS_KEY" "${AGENT_MENU[@]}"
   chain set-option -g @greenroom_bound "$BOUND"
 }
 

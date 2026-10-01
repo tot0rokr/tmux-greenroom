@@ -302,6 +302,26 @@ test_changed_key_replaces_the_old_binding() {
   wait_for popup_closed || fail "new key did not close the popup"
 }
 
+menu_closed() {
+  ! screen_has "$1"
+}
+
+test_menu_key_options_bind_on_host_and_in_popup() {
+  start_host "set -g @greenroom-agents-key C" "set -g @greenroom-workspaces-key W"
+  is_bound prefix W "${HOST[@]}" || fail "host does not bind W" || return
+  ! is_bound prefix G "${HOST[@]}" || fail "host still binds the default G" || return
+  open_popup || return
+  is_bound prefix C "${AGENT[@]}" || fail "agent server does not bind C" || return
+  is_bound prefix W "${AGENT[@]}" || fail "agent server does not bind W" || return
+  ! is_bound prefix G "${AGENT[@]}" || fail "agent server binds the default G" || return
+  press C-a C
+  wait_for screen_has 'new agent' || fail "agent menu not shown with C" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  press C-a W
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown with W"
+}
+
 test_workspace_menu_creates_and_switches() {
   start_host
   open_popup || return

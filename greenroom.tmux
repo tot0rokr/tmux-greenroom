@@ -31,7 +31,7 @@ main() {
   if [[ -n $root_key ]]; then
     bind_key root "$root_key" "${POPUP[@]}" "$attach"
   fi
-  bind_key prefix "$(get_tmux_option @greenroom-menu-key G)" "${POPUP[@]}" "$attach --menu"
+  bind_key prefix "$(get_tmux_option @greenroom-workspaces-key G)" "${POPUP[@]}" "$attach --menu"
 
   # Both commands are format-expanded when they run.
   send=$(format_escape "$(quote "$SCRIPTS_DIR/send.sh")")

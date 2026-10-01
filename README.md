@@ -148,25 +148,25 @@ Shift+Enter reaches the agent inside the popup if your host tmux has `extended-k
 
 ## Options
 
-| Option                     | Default                        | Description                                                           |
-| -------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `@greenroom-key`           | `g`                            | Key that opens and closes the popup                                   |
-| `@greenroom-root-key`      | empty                          | Key that opens and closes the popup without the prefix, such as `M-g` |
-| `@greenroom-menu-key`      | `G`                            | Key for the workspace menu                                            |
-| `@greenroom-new-key`       | `c`                            | Key for the agent menu inside the popup                               |
-| `@greenroom-send-key`      | `a`                            | Copy-mode key that sends the selection to the agent                   |
-| `@greenroom-send-pane-key` | `S`                            | Key that sends the visible screen of the pane to the agent            |
-| `@greenroom-agents`        | `claude codex gemini opencode` | Agents in the menu, in order                                          |
-| `@greenroom-<name>-cmd`    | `<name>`                       | Command that starts the agent called `<name>`                         |
-| `@greenroom-default`       | `claude`                       | First agent of a new workspace                                        |
-| `@greenroom-workspace`     | `main`                         | Workspace to open when there is no last workspace                     |
-| `@greenroom-width`         | `80%`                          | Popup width                                                           |
-| `@greenroom-height`        | `80%`                          | Popup height                                                          |
-| `@greenroom-x`             | `C`                            | Popup horizontal position                                             |
-| `@greenroom-y`             | `C`                            | Popup vertical position                                               |
-| `@greenroom-border-lines`  | `rounded`                      | Popup border, a `popup-border-lines` value                            |
-| `@greenroom-socket`        | `greenroom`                    | Socket name of the agent server (`tmux -L`)                           |
-| `@greenroom-config`        | empty                          | Extra config file for the agent server                                |
+| Option                      | Default                        | Description                                                           |
+| --------------------------- | ------------------------------ | --------------------------------------------------------------------- |
+| `@greenroom-key`            | `g`                            | Key that opens and closes the popup                                   |
+| `@greenroom-root-key`       | empty                          | Key that opens and closes the popup without the prefix, such as `M-g` |
+| `@greenroom-workspaces-key` | `G`                            | Key for the workspace menu, on the host and inside the popup          |
+| `@greenroom-agents-key`     | `c`                            | Key for the agent menu inside the popup                               |
+| `@greenroom-send-key`       | `a`                            | Copy-mode key that sends the selection to the agent                   |
+| `@greenroom-send-pane-key`  | `S`                            | Key that sends the visible screen of the pane to the agent            |
+| `@greenroom-agents`         | `claude codex gemini opencode` | Agents in the menu, in order                                          |
+| `@greenroom-<name>-cmd`     | `<name>`                       | Command that starts the agent called `<name>`                         |
+| `@greenroom-default`        | `claude`                       | First agent of a new workspace                                        |
+| `@greenroom-workspace`      | `main`                         | Workspace to open when there is no last workspace                     |
+| `@greenroom-width`          | `80%`                          | Popup width                                                           |
+| `@greenroom-height`         | `80%`                          | Popup height                                                          |
+| `@greenroom-x`              | `C`                            | Popup horizontal position                                             |
+| `@greenroom-y`              | `C`                            | Popup vertical position                                               |
+| `@greenroom-border-lines`   | `rounded`                      | Popup border, a `popup-border-lines` value                            |
+| `@greenroom-socket`         | `greenroom`                    | Socket name of the agent server (`tmux -L`)                           |
+| `@greenroom-config`         | empty                          | Extra config file for the agent server                                |
 
 An agent name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` from your login profile applies. `shell` is always in the menu; set `@greenroom-shell-cmd` to run something other than your login shell.
 
@@ -179,7 +179,7 @@ set -g @greenroom-agents 'claude codex aider'
 set -g @greenroom-aider-cmd 'aider --no-auto-commits'
 ```
 
-The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-menu-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) and the popup options (`@greenroom-width`, `@greenroom-height`, `@greenroom-x`, `@greenroom-y`, `@greenroom-border-lines`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options are read on every open.
+The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-workspaces-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) and the popup options (`@greenroom-width`, `@greenroom-height`, `@greenroom-x`, `@greenroom-y`, `@greenroom-border-lines`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options are read on every open.
 
 ## Customizing the agent server
 
