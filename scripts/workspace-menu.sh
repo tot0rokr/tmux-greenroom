@@ -8,7 +8,7 @@ MAX_NUMBERED=9
 # The typed name goes through an option, never through a shell command line.
 prompt_item() {
   local label=$1 key=$2 prompt=$3 initial=$4 script=$5 template
-  template="set-option -g @llm_agent_pending \"%%%\" ; run-shell -b $(quote "$(quote "$SCRIPTS_DIR/$script") $(quote "$CLIENT")")"
+  template="set-option -g @greenroom_pending \"%%%\" ; run-shell -b $(quote "$(quote "$SCRIPTS_DIR/$script") $(quote "$CLIENT")")"
   ITEMS+=("$label" "$key" "$(format_escape "command-prompt -I $(quote "$initial") -p $(quote "$prompt") $(quote "$template")")")
 }
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Integration tests. A harness server runs a real host client in a pane and
 # types into it with send-keys. Every server uses its own -L socket, so the
-# default server and the real llm-agent socket are never touched.
+# default server and the real greenroom socket are never touched.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ID="tla-test-$$"
+ID="tgr-test-$$"
 HARNESS=(tmux -L "$ID-harness" -f /dev/null)
 HOST=(tmux -L "$ID-host")
 AGENT=(tmux -L "$ID-agent")
-WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tla-test.XXXXXX")
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tgr-test.XXXXXX")
 # Characters that break shell quoting, tmux formats and tmux argv parsing.
 ORIGIN="$WORK_DIR/it's #S \$x;"
 TIMEOUT_SECONDS=5
@@ -92,15 +92,15 @@ start_host() {
       'set -g default-terminal tmux-256color' \
       'set -s extended-keys on' \
       "set -as terminal-features ',tmux*:extkeys'" \
-      "set -g @llm-agent-socket '$ID-agent'" \
-      "set -g @llm-agent-agents 'claude codex missing'" \
-      "set -g @llm-agent-claude-cmd '\"$WORK_DIR/stub-agent\" claude'" \
-      "set -g @llm-agent-codex-cmd '\"$WORK_DIR/stub-agent\" codex'" \
-      "set -g @llm-agent-missing-cmd 'no-such-agent-binary --flag'"
+      "set -g @greenroom-socket '$ID-agent'" \
+      "set -g @greenroom-agents 'claude codex missing'" \
+      "set -g @greenroom-claude-cmd '\"$WORK_DIR/stub-agent\" claude'" \
+      "set -g @greenroom-codex-cmd '\"$WORK_DIR/stub-agent\" codex'" \
+      "set -g @greenroom-missing-cmd 'no-such-agent-binary --flag'"
     for line in "$@"; do
       printf '%s\n' "$line"
     done
-    printf '%s\n' "run-shell '$REPO_DIR/llm-agent.tmux'"
+    printf '%s\n' "run-shell '$REPO_DIR/greenroom.tmux'"
   } > "$WORK_DIR/host.conf"
 
   # new-session -c expands formats, and a trailing ';' would end the argument.
@@ -187,7 +187,7 @@ test_toggle_opens_workspace_with_default_agent() {
   [[ $(agent_windows main) == 'claude ' ]] || fail "windows: $(agent_windows main)" || return
   [[ $(pane_field main claude '#{pane_current_path}') == "$ORIGIN" ]] ||
     fail "agent cwd: $(pane_field main claude '#{pane_current_path}')" || return
-  [[ $("${AGENT[@]}" show-option -qv -t =main: @llm_agent_origin | unescape_output) == "$ORIGIN" ]] ||
+  [[ $("${AGENT[@]}" show-option -qv -t =main: @greenroom_origin | unescape_output) == "$ORIGIN" ]] ||
     fail "origin option not set" || return
   wait_for screen_has "STUB claude in $ORIGIN" || fail "stub output not visible in popup"
 }
@@ -226,7 +226,7 @@ test_agent_menu_adds_agent_in_origin() {
 }
 
 test_agent_command_keeps_shell_syntax() {
-  start_host "set -g @llm-agent-claude-cmd '\"$WORK_DIR/stub-agent\" \"v\$((1+2))\"'"
+  start_host "set -g @greenroom-claude-cmd '\"$WORK_DIR/stub-agent\" \"v\$((1+2))\"'"
   open_popup || return
   wait_for screen_has "STUB v3 in" || fail "command was not run as written"
 }
@@ -236,7 +236,7 @@ test_host_option_changes_apply_on_next_open() {
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -g @llm-agent-codex-cmd "\"$WORK_DIR/stub-agent\" codex-new"
+  "${HOST[@]}" set-option -g @greenroom-codex-cmd "\"$WORK_DIR/stub-agent\" codex-new"
   open_popup || return
   press C-a c
   wait_for screen_has 'new agent' || fail "agent menu not shown" || return
@@ -291,7 +291,7 @@ test_changed_key_replaces_the_old_binding() {
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -g @llm-agent-key y \; run-shell "$REPO_DIR/llm-agent.tmux"
+  "${HOST[@]}" set-option -g @greenroom-key y \; run-shell "$REPO_DIR/greenroom.tmux"
   is_bound prefix y "${HOST[@]}" || fail "host does not bind y" || return
   ! is_bound prefix g "${HOST[@]}" || fail "host still binds g" || return
   press C-a y
@@ -332,8 +332,8 @@ test_host_menu_key_opens_workspace_menu() {
 }
 
 test_shift_enter_reaches_the_agent() {
-  start_host "set -g @llm-agent-default keylog" \
-    "set -g @llm-agent-keylog-cmd '\"$WORK_DIR/key-logger\" \"$WORK_DIR/keys.log\"'"
+  start_host "set -g @greenroom-default keylog" \
+    "set -g @greenroom-keylog-cmd '\"$WORK_DIR/key-logger\" \"$WORK_DIR/keys.log\"'"
   open_popup || return
   wait_for test -e "$WORK_DIR/keys.log" || fail "key logger did not start" || return
   sleep 0.3
@@ -349,19 +349,19 @@ got_shift_enter() {
 
 test_plugin_is_inert_inside_agent_server() {
   local guard=(tmux -L "$ID-guard" -f "$REPO_DIR/conf/agent-server.conf")
-  "${guard[@]}" new-session -d \; run-shell "$REPO_DIR/llm-agent.tmux"
+  "${guard[@]}" new-session -d \; run-shell "$REPO_DIR/greenroom.tmux"
   ! is_bound prefix g "${guard[@]}" || fail "host keys were bound" || return
   # Control: the same load binds the keys once the marker is gone.
-  "${guard[@]}" set-option -gu @llm_agent_server \; run-shell "$REPO_DIR/llm-agent.tmux"
+  "${guard[@]}" set-option -gu @greenroom_server \; run-shell "$REPO_DIR/greenroom.tmux"
   is_bound prefix g "${guard[@]}" || fail "plugin did not bind keys without the marker"
 }
 
 test_removed_host_option_is_removed_from_agent_server() {
-  start_host "set -g @llm-agent-missing-cmd '\"$WORK_DIR/stub-agent\" missing-set'"
+  start_host "set -g @greenroom-missing-cmd '\"$WORK_DIR/stub-agent\" missing-set'"
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -gu @llm-agent-missing-cmd
+  "${HOST[@]}" set-option -gu @greenroom-missing-cmd
   open_popup || return
   press C-a c
   wait_for screen_has 'new agent' || fail "agent menu not shown" || return
@@ -371,13 +371,13 @@ test_removed_host_option_is_removed_from_agent_server() {
 
 test_agent_server_reads_extra_config() {
   printf '%s\n' 'set -g @from-extra-config yes' > "$WORK_DIR/agent.conf"
-  start_host "set -g @llm-agent-config '$WORK_DIR/agent.conf'"
+  start_host "set -g @greenroom-config '$WORK_DIR/agent.conf'"
   open_popup || return
   [[ $("${AGENT[@]}" show-option -gqv @from-extra-config) == yes ]] || fail "extra config not read"
 }
 
 test_root_key_toggles_without_prefix() {
-  start_host "set -g @llm-agent-root-key M-g"
+  start_host "set -g @greenroom-root-key M-g"
   press M-g
   wait_for popup_on main || fail "popup did not open" || return
   press M-g
@@ -404,7 +404,7 @@ test_workspace_menu_renames_with_a_clean_name() {
   type_text 'v1.2 next'
   press Enter
   wait_for popup_on v1_2_next || fail "client not on v1_2_next: $(agent_client_session)" || return
-  [[ $("${AGENT[@]}" show-option -gqv @llm_agent_last) == v1_2_next ]] || fail "last workspace not updated"
+  [[ $("${AGENT[@]}" show-option -gqv @greenroom_last) == v1_2_next ]] || fail "last workspace not updated"
 }
 
 test_workspace_menu_kills_the_workspace() {
@@ -420,12 +420,12 @@ test_workspace_menu_kills_the_workspace() {
 }
 
 test_default_workspace_name_is_cleaned() {
-  start_host "set -g @llm-agent-workspace 'my.proj'"
+  start_host "set -g @greenroom-workspace 'my.proj'"
   open_popup my_proj
 }
 
 host_alert() {
-  "${HOST[@]}" show-option -gqv @llm_agent_alert
+  "${HOST[@]}" show-option -gqv @greenroom_alert
 }
 
 host_alert_is() {
@@ -439,7 +439,7 @@ test_bell_in_a_closed_popup_alerts_the_host() {
   wait_for popup_closed || fail "popup still open" || return
   "${AGENT[@]}" send-keys -t =main:claude bell Enter
   wait_for host_alert_is 'claude@main' || fail "host alert: [$(host_alert)]" || return
-  wait_for screen_has 'llm-agent: claude@main rang the bell' || fail "no message on the host" || return
+  wait_for screen_has 'greenroom: claude@main rang the bell' || fail "no message on the host" || return
   open_popup || return
   wait_for host_alert_is '' || fail "alert not cleared after opening: [$(host_alert)]"
 }
@@ -453,12 +453,12 @@ test_bell_in_the_visible_agent_is_not_announced() {
 }
 
 # The snippet README.md gives for status-right.
-STATUS_SNIPPET='#{?@llm_agent_alert,#[fg=black#,bg=yellow#,bold] #{@llm_agent_alert} #[default],}'
+STATUS_SNIPPET='#{?@greenroom_alert,#[fg=black#,bg=yellow#,bold] #{@greenroom_alert} #[default],}'
 
 test_status_snippet_shows_only_an_alert() {
   start_host
   [[ -z $("${HOST[@]}" display-message -p "$STATUS_SNIPPET") ]] || fail "renders without an alert" || return
-  "${HOST[@]}" set-option -g @llm_agent_alert 'claude@main'
+  "${HOST[@]}" set-option -g @greenroom_alert 'claude@main'
   [[ $("${HOST[@]}" display-message -p "$STATUS_SNIPPET") == '#[fg=black,bg=yellow,bold] claude@main #[default]' ]] ||
     fail "rendered: $("${HOST[@]}" display-message -p "$STATUS_SNIPPET")"
 }

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Option names: @llm-agent-* are user options, @llm_agent_* are plugin state.
+# Option names: @greenroom-* are user options, @greenroom_* are plugin state.
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(dirname "$SCRIPTS_DIR")"
 FIELD_SEPARATOR=$'\037'
 # Carries text sent to an agent: a host buffer first, then an agent server one.
-SEND_BUFFER=llm_agent_send
+SEND_BUFFER=greenroom_send
 
 get_tmux_option() {
   local value
@@ -18,7 +18,7 @@ get_tmux_option() {
 # tmux 3.4 prints '$' as '\$' in show-option and display-message output, and
 # a paste buffer is the one path that returns values as stored.
 read_raw_options() {
-  local buffer="llm-agent-read-$$" target=() format=x name
+  local buffer="greenroom-read-$$" target=() format=x name
   if [[ $1 == -t ]]; then
     target=(-t "$2")
     shift 2
@@ -69,8 +69,8 @@ sanitize_name() {
 # Reads the name typed into a workspace prompt (see workspace-menu.sh).
 take_pending_name() {
   local name
-  name=$(read_raw_options @llm_agent_pending)
-  tmux set-option -gu @llm_agent_pending
+  name=$(read_raw_options @greenroom_pending)
+  tmux set-option -gu @greenroom_pending
   sanitize_name "${name%"$FIELD_SEPARATOR"}"
 }
 
@@ -83,10 +83,10 @@ agent_command() {
 # which tmux expands as a format.
 popup_args() {
   POPUP=(display-popup -E -d "$1"
-    -w "$(get_tmux_option @llm-agent-width 80%)"
-    -h "$(get_tmux_option @llm-agent-height 80%)"
-    -x "$(get_tmux_option @llm-agent-x C)"
-    -y "$(get_tmux_option @llm-agent-y C)"
-    -b "$(get_tmux_option @llm-agent-border-lines rounded)"
+    -w "$(get_tmux_option @greenroom-width 80%)"
+    -h "$(get_tmux_option @greenroom-height 80%)"
+    -x "$(get_tmux_option @greenroom-x C)"
+    -y "$(get_tmux_option @greenroom-y C)"
+    -b "$(get_tmux_option @greenroom-border-lines rounded)"
     -T ' agents ')
 }

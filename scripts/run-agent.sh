@@ -5,7 +5,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 
 name=$1
-cmd=$(read_raw_options "@llm-agent-$name-cmd")
+cmd=$(read_raw_options "@greenroom-$name-cmd")
 cmd=${cmd%"$FIELD_SEPARATOR"}
 
 if [[ -z $cmd && $name == shell ]]; then

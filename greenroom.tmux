@@ -15,35 +15,35 @@ bind_key() {
 main() {
   local root_key send_key attach send binding
   # The agent server can be pointed at a config that loads this plugin again.
-  if [[ -n $(get_tmux_option @llm_agent_server '') ]]; then
+  if [[ -n $(get_tmux_option @greenroom_server '') ]]; then
     return
   fi
 
   # Drop the keys a previous load bound, in case the options changed.
-  for binding in $(get_tmux_option @llm_agent_bound ''); do
+  for binding in $(get_tmux_option @greenroom_bound ''); do
     tmux unbind-key -T "${binding%%:*}" "$(tmux_arg "${binding#*:}")"
   done
 
   attach=$(quote "$SCRIPTS_DIR/attach.sh")
   popup_args '#{pane_current_path}'
-  bind_key prefix "$(get_tmux_option @llm-agent-key g)" "${POPUP[@]}" "$attach"
-  root_key=$(get_tmux_option @llm-agent-root-key '')
+  bind_key prefix "$(get_tmux_option @greenroom-key g)" "${POPUP[@]}" "$attach"
+  root_key=$(get_tmux_option @greenroom-root-key '')
   if [[ -n $root_key ]]; then
     bind_key root "$root_key" "${POPUP[@]}" "$attach"
   fi
-  bind_key prefix "$(get_tmux_option @llm-agent-menu-key G)" "${POPUP[@]}" "$attach --menu"
+  bind_key prefix "$(get_tmux_option @greenroom-menu-key G)" "${POPUP[@]}" "$attach --menu"
 
   # Both commands are format-expanded when they run.
   send=$(format_escape "$(quote "$SCRIPTS_DIR/send.sh")")
-  send_key=$(get_tmux_option @llm-agent-send-key a)
+  send_key=$(get_tmux_option @greenroom-send-key a)
   bind_key copy-mode "$send_key" send-keys -X pipe-and-cancel \
     "$send selection '#{client_name}' #{q:pane_current_path}"
   bind_key copy-mode-vi "$send_key" send-keys -X pipe-and-cancel \
     "$send selection '#{client_name}' #{q:pane_current_path}"
-  bind_key prefix "$(get_tmux_option @llm-agent-send-pane-key S)" run-shell -b \
+  bind_key prefix "$(get_tmux_option @greenroom-send-pane-key S)" run-shell -b \
     "$send pane '#{client_name}' #{q:pane_current_path} '#{pane_id}'"
 
-  tmux set-option -g @llm_agent_bound "$BOUND"
+  tmux set-option -g @greenroom_bound "$BOUND"
 }
 
 main

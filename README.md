@@ -1,11 +1,13 @@
-# tmux-llm-agent
+# tmux-greenroom
 
 Keep AI coding agents one keystroke away from any tmux window. Toggle a popup that hosts Claude Code, Codex, Gemini CLI, OpenCode, or any other agent CLI, and close it without stopping them.
+
+The name comes from the green room of a theater or TV studio, where performers wait off stage until they are called. Your agents wait there, still running, until you bring them up.
 
 The popup shows a dedicated tmux server. Its sessions are workspaces and its windows are agents.
 
 ```
- your tmux (host server)                 agent server (tmux -L llm-agent)
+ your tmux (host server)                 agent server (tmux -L greenroom)
 ┌──────────────────────────────┐        ┌────────────────────────────┐
 │ session "work"               │        │ workspace "main"           │
 │  └ popup ────────────────────┼───────▶│  ├ agent 0: claude         │
@@ -34,7 +36,7 @@ The popup shows a dedicated tmux server. Its sessions are workspaces and its win
 Add the plugin to `~/.tmux.conf`:
 
 ```tmux
-set -g @plugin 'tot0rokr/tmux-llm-agent'
+set -g @plugin 'tot0rokr/tmux-greenroom'
 ```
 
 Then press `prefix` + `I` to install it.
@@ -42,13 +44,13 @@ Then press `prefix` + `I` to install it.
 ### Manual
 
 ```bash
-git clone https://github.com/tot0rokr/tmux-llm-agent ~/.tmux/plugins/tmux-llm-agent
+git clone https://github.com/tot0rokr/tmux-greenroom ~/.tmux/plugins/tmux-greenroom
 ```
 
 Add this line to `~/.tmux.conf` and reload the config:
 
 ```tmux
-run-shell ~/.tmux/plugins/tmux-llm-agent/llm-agent.tmux
+run-shell ~/.tmux/plugins/tmux-greenroom/greenroom.tmux
 ```
 
 ## Usage
@@ -61,7 +63,7 @@ On the host:
 | `prefix` + `G`        | Open the popup with the workspace menu on top            |
 | `prefix` + `S`        | Send the visible screen of the pane to the agent         |
 | `a` in copy mode      | Send the selection to the agent                          |
-| `@llm-agent-root-key` | Same as `prefix` + `g`, without the prefix (only if set) |
+| `@greenroom-root-key` | Same as `prefix` + `g`, without the prefix (only if set) |
 
 The first open starts the agent server and a workspace named `main` with one `claude` agent. Later opens go to the workspace you used last.
 
@@ -79,11 +81,11 @@ Inside the popup, the agent server uses the same prefix as your host tmux:
 | `prefix` + `$`               | Rename the workspace (tmux default)       |
 | `prefix` + `prefix`          | Send the prefix key to the agent          |
 
-If you set `@llm-agent-root-key`, the same key also closes the popup. It is not passed on to the agent.
+If you set `@greenroom-root-key`, the same key also closes the popup. It is not passed on to the agent.
 
 ### Agent menu
 
-`prefix` + `c` lists the agents from `@llm-agent-agents`, then a `shell` entry that starts your login shell. The chosen agent opens in a new window, named after the agent. Its directory is the one recorded for the current workspace: the pane that last opened the popup on it.
+`prefix` + `c` lists the agents from `@greenroom-agents`, then a `shell` entry that starts your login shell. The chosen agent opens in a new window, named after the agent. Its directory is the one recorded for the current workspace: the pane that last opened the popup on it.
 
 The shortcut of each entry is the first letter of its name that no earlier entry took. The letters `q`, `j`, `k`, `g`, and `G` are skipped because `display-menu` uses them itself.
 
@@ -104,7 +106,7 @@ The shortcut of each entry is the first letter of its name that no earlier entry
 | `r`     | Rename the current workspace                     |
 | `x`     | Kill the current workspace, after a confirmation |
 
-A new workspace starts one `@llm-agent-default` agent in the directory of the current workspace. Characters other than letters, digits, `_`, and `-` in a workspace name are replaced with `_`, for new and renamed workspaces and for `@llm-agent-workspace`. Renaming with tmux's own `prefix` + `$` skips this; a name with `.` or `:` then cannot be picked as the last workspace.
+A new workspace starts one `@greenroom-default` agent in the directory of the current workspace. Characters other than letters, digits, `_`, and `-` in a workspace name are replaced with `_`, for new and renamed workspaces and for `@greenroom-workspace`. Renaming with tmux's own `prefix` + `$` skips this; a name with `.` or `:` then cannot be picked as the last workspace.
 
 ### Lifetime
 
@@ -128,8 +130,8 @@ Sending does not touch your paste buffers or the clipboard.
 
 An agent that rings the terminal bell while you cannot see it, because the popup is closed or shows another agent, raises an alert on the host:
 
-- A `display-message` on every host client, such as `llm-agent: claude@main rang the bell`.
-- The host option `@llm_agent_alert`, which lists the agents with an unseen bell as `agent@workspace`, separated by spaces. Opening the popup on an agent clears its entry.
+- A `display-message` on every host client, such as `greenroom: claude@main rang the bell`.
+- The host option `@greenroom_alert`, which lists the agents with an unseen bell as `agent@workspace`, separated by spaces. Opening the popup on an agent clears its entry.
 - Inside the popup, the window list marks those agents with `!`.
 
 The plugin adds nothing to make an agent ring the bell. Configure your agent CLI to do it, for example from a hook that runs when it finishes or needs input. The agent server always uses `bell-action any`, so a bell from the agent a closed popup was showing still counts.
@@ -137,7 +139,7 @@ The plugin adds nothing to make an agent ring the bell. Configure your agent CLI
 To show the alert in the host status line, add this to `~/.tmux.conf` after the plugin is loaded. It renders nothing while there is no alert, or when the plugin is not installed, and the guard keeps a config reload from adding it twice:
 
 ```tmux
-if-shell -F '#{m:*llm_agent_alert*,#{status-right}}' '' "set -ga status-right '#{?@llm_agent_alert,#[fg=black#,bg=yellow#,bold] #{@llm_agent_alert} #[default],}'"
+if-shell -F '#{m:*greenroom_alert*,#{status-right}}' '' "set -ga status-right '#{?@greenroom_alert,#[fg=black#,bg=yellow#,bold] #{@greenroom_alert} #[default],}'"
 ```
 
 ### Shift+Enter
@@ -148,64 +150,64 @@ Shift+Enter reaches the agent inside the popup if your host tmux has `extended-k
 
 | Option                     | Default                        | Description                                                           |
 | -------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `@llm-agent-key`           | `g`                            | Key that opens and closes the popup                                   |
-| `@llm-agent-root-key`      | empty                          | Key that opens and closes the popup without the prefix, such as `M-g` |
-| `@llm-agent-menu-key`      | `G`                            | Key for the workspace menu                                            |
-| `@llm-agent-new-key`       | `c`                            | Key for the agent menu inside the popup                               |
-| `@llm-agent-send-key`      | `a`                            | Copy-mode key that sends the selection to the agent                   |
-| `@llm-agent-send-pane-key` | `S`                            | Key that sends the visible screen of the pane to the agent            |
-| `@llm-agent-agents`        | `claude codex gemini opencode` | Agents in the menu, in order                                          |
-| `@llm-agent-<name>-cmd`    | `<name>`                       | Command that starts the agent called `<name>`                         |
-| `@llm-agent-default`       | `claude`                       | First agent of a new workspace                                        |
-| `@llm-agent-workspace`     | `main`                         | Workspace to open when there is no last workspace                     |
-| `@llm-agent-width`         | `80%`                          | Popup width                                                           |
-| `@llm-agent-height`        | `80%`                          | Popup height                                                          |
-| `@llm-agent-x`             | `C`                            | Popup horizontal position                                             |
-| `@llm-agent-y`             | `C`                            | Popup vertical position                                               |
-| `@llm-agent-border-lines`  | `rounded`                      | Popup border, a `popup-border-lines` value                            |
-| `@llm-agent-socket`        | `llm-agent`                    | Socket name of the agent server (`tmux -L`)                           |
-| `@llm-agent-config`        | empty                          | Extra config file for the agent server                                |
+| `@greenroom-key`           | `g`                            | Key that opens and closes the popup                                   |
+| `@greenroom-root-key`      | empty                          | Key that opens and closes the popup without the prefix, such as `M-g` |
+| `@greenroom-menu-key`      | `G`                            | Key for the workspace menu                                            |
+| `@greenroom-new-key`       | `c`                            | Key for the agent menu inside the popup                               |
+| `@greenroom-send-key`      | `a`                            | Copy-mode key that sends the selection to the agent                   |
+| `@greenroom-send-pane-key` | `S`                            | Key that sends the visible screen of the pane to the agent            |
+| `@greenroom-agents`        | `claude codex gemini opencode` | Agents in the menu, in order                                          |
+| `@greenroom-<name>-cmd`    | `<name>`                       | Command that starts the agent called `<name>`                         |
+| `@greenroom-default`       | `claude`                       | First agent of a new workspace                                        |
+| `@greenroom-workspace`     | `main`                         | Workspace to open when there is no last workspace                     |
+| `@greenroom-width`         | `80%`                          | Popup width                                                           |
+| `@greenroom-height`        | `80%`                          | Popup height                                                          |
+| `@greenroom-x`             | `C`                            | Popup horizontal position                                             |
+| `@greenroom-y`             | `C`                            | Popup vertical position                                               |
+| `@greenroom-border-lines`  | `rounded`                      | Popup border, a `popup-border-lines` value                            |
+| `@greenroom-socket`        | `greenroom`                    | Socket name of the agent server (`tmux -L`)                           |
+| `@greenroom-config`        | empty                          | Extra config file for the agent server                                |
 
-An agent name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` from your login profile applies. `shell` is always in the menu; set `@llm-agent-shell-cmd` to run something other than your login shell.
+An agent name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` from your login profile applies. `shell` is always in the menu; set `@greenroom-shell-cmd` to run something other than your login shell.
 
 ```tmux
-set -g @llm-agent-key 'a'
-set -g @llm-agent-root-key 'M-a'
-set -g @llm-agent-width '90%'
-set -g @llm-agent-claude-cmd 'claude --model opus'
-set -g @llm-agent-agents 'claude codex aider'
-set -g @llm-agent-aider-cmd 'aider --no-auto-commits'
+set -g @greenroom-key 'a'
+set -g @greenroom-root-key 'M-a'
+set -g @greenroom-width '90%'
+set -g @greenroom-claude-cmd 'claude --model opus'
+set -g @greenroom-agents 'claude codex aider'
+set -g @greenroom-aider-cmd 'aider --no-auto-commits'
 ```
 
-The host keys (`@llm-agent-key`, `@llm-agent-root-key`, `@llm-agent-menu-key`, `@llm-agent-send-key`, `@llm-agent-send-pane-key`) and the popup options (`@llm-agent-width`, `@llm-agent-height`, `@llm-agent-x`, `@llm-agent-y`, `@llm-agent-border-lines`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options are read on every open.
+The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-menu-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) and the popup options (`@greenroom-width`, `@greenroom-height`, `@greenroom-x`, `@greenroom-y`, `@greenroom-border-lines`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options are read on every open.
 
 ## Customizing the agent server
 
-The agent server does not read your `tmux.conf`. Reading it would run TPM again inside the agent server, and plugins such as tmux-continuum could overwrite your saved host state. It reads `conf/agent-server.conf` from the plugin, then the file named by `@llm-agent-config`, once when it starts.
+The agent server does not read your `tmux.conf`. Reading it would run TPM again inside the agent server, and plugins such as tmux-continuum could overwrite your saved host state. It reads `conf/agent-server.conf` from the plugin, then the file named by `@greenroom-config`, once when it starts.
 
 Use that file for the status line, colors, and plugins you want inside the popup. For example, to load tmux-cuecard in the popup:
 
 ```tmux
-set -g @llm-agent-config '~/.tmux/llm-agent.conf'
+set -g @greenroom-config '~/.tmux/greenroom.conf'
 ```
 
 ```tmux
-# ~/.tmux/llm-agent.conf
+# ~/.tmux/greenroom.conf
 run-shell ~/.tmux/plugins/tmux-cuecard/cuecard.tmux
 ```
 
 What the agent server takes from the host:
 
-- On every open: `prefix`, `prefix2`, and every `@llm-agent-*` option. Removing an option on the host removes it from the agent server too.
+- On every open: `prefix`, `prefix2`, and every `@greenroom-*` option. Removing an option on the host removes it from the agent server too.
 - Once, when the agent server starts: `default-terminal`, `history-limit`, `mouse`, `mode-keys`, `status-keys`, `base-index`, `pane-base-index`, `escape-time`, `extended-keys`, and `set-clipboard`.
 
 To apply a change to the second group, restart the agent server:
 
 ```bash
-tmux -L llm-agent kill-server
+tmux -L greenroom kill-server
 ```
 
-This also stops every agent. If you changed `@llm-agent-socket`, use that name instead.
+This also stops every agent. If you changed `@greenroom-socket`, use that name instead.
 
 ## State
 
@@ -214,7 +216,7 @@ The plugin writes no files. Workspaces, agents, and the last-used workspace live
 - Closing the popup keeps everything.
 - Restarting or killing the host tmux server keeps everything. The next host server that loads the plugin opens the same agents.
 - Stopping the agent server, or rebooting, ends every agent. Use the resume feature of the agent CLI, such as `claude --continue`, to pick up a conversation.
-- Each agent server socket is separate. A host that sets a different `@llm-agent-socket` sees different workspaces.
+- Each agent server socket is separate. A host that sets a different `@greenroom-socket` sees different workspaces.
 
 ## Known limitations
 

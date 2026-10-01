@@ -8,9 +8,9 @@ A tmux plugin that toggles a popup attached to a dedicated tmux server hosting A
 
 ## Hard rules
 
-- Tests and experiments use their own `tmux -L <unique-name>` sockets. Never touch the default tmux server or a socket named `llm-agent`: the user's real agents live there.
-- Host-side code (`llm-agent.tmux`, `scripts/attach.sh`) passes `-L "$socket"` on every agent server call. Inside a popup, `$TMUX` points at the host server, so a bare `tmux` goes to the wrong server. Scripts that run inside the agent server use a bare `tmux`.
-- `@llm-agent-*` names are user options and are copied to the agent server on every open. Plugin state uses `@llm_agent_*`. Do not mix the two.
+- Tests and experiments use their own `tmux -L <unique-name>` sockets. Never touch the default tmux server or a socket named `greenroom`: the user's real agents live there.
+- Host-side code (`greenroom.tmux`, `scripts/attach.sh`) passes `-L "$socket"` on every agent server call. Inside a popup, `$TMUX` points at the host server, so a bare `tmux` goes to the wrong server. Scripts that run inside the agent server use a bare `tmux`.
+- `@greenroom-*` names are user options and are copied to the agent server on every open. Plugin state uses `@greenroom_*`. Do not mix the two.
 - Read option values that may hold shell text or paths with `read_raw_options`, not `show-option -v` or `display-message -p`: tmux 3.4 escapes `$` in command output.
 - Pass user-controlled values through `tmux_arg` when they go on a tmux command line (an argument ending in `;` is a separator), and through `format_escape` when tmux expands them as a format (`new-session -c`, `display-menu` items).
 - Scripts must run on bash 3.2 (the macOS default): no associative arrays, `mapfile`, or `${var,,}`.
@@ -20,7 +20,7 @@ A tmux plugin that toggles a popup attached to a dedicated tmux server hosting A
 ## Checks
 
 - Run `tests/run.sh` and `BASH_COMPAT=3.2 tests/run.sh` before committing. To test another tmux build, put a directory with a `tmux` symlink to it first in `PATH`.
-- Run `shellcheck` on `llm-agent.tmux` and `scripts/*.sh` when it is installed.
+- Run `shellcheck` on `greenroom.tmux` and `scripts/*.sh` when it is installed.
 
 ## Docs
 

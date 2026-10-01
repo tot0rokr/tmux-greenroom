@@ -12,15 +12,15 @@ RESERVED_MENU_KEYS=qjkgG
 # Hook array slots this plugin owns; conf/agent-server.conf uses 100.
 ALERT_HOOK_INDEX=101
 
-SOCKET=$(get_tmux_option @llm-agent-socket llm-agent)
-KEY=$(get_tmux_option @llm-agent-key g)
-ROOT_KEY=$(get_tmux_option @llm-agent-root-key '')
-NEW_KEY=$(get_tmux_option @llm-agent-new-key c)
-MENU_KEY=$(get_tmux_option @llm-agent-menu-key G)
-AGENTS=$(get_tmux_option @llm-agent-agents 'claude codex gemini opencode')
-DEFAULT_AGENT=$(get_tmux_option @llm-agent-default claude)
-DEFAULT_WORKSPACE=$(sanitize_name "$(get_tmux_option @llm-agent-workspace main)")
-USER_CONFIG=$(get_tmux_option @llm-agent-config '')
+SOCKET=$(get_tmux_option @greenroom-socket greenroom)
+KEY=$(get_tmux_option @greenroom-key g)
+ROOT_KEY=$(get_tmux_option @greenroom-root-key '')
+NEW_KEY=$(get_tmux_option @greenroom-new-key c)
+MENU_KEY=$(get_tmux_option @greenroom-menu-key G)
+AGENTS=$(get_tmux_option @greenroom-agents 'claude codex gemini opencode')
+DEFAULT_AGENT=$(get_tmux_option @greenroom-default claude)
+DEFAULT_WORKSPACE=$(sanitize_name "$(get_tmux_option @greenroom-workspace main)")
+USER_CONFIG=$(get_tmux_option @greenroom-config '')
 
 CHAIN=()
 BOUND=''
@@ -60,7 +60,7 @@ pick_workspace() {
     sanitize_name "$1"
     return
   fi
-  for candidate in "$(agent_tmux show-option -gqv @llm_agent_last 2>/dev/null)" "$DEFAULT_WORKSPACE"; do
+  for candidate in "$(agent_tmux show-option -gqv @greenroom_last 2>/dev/null)" "$DEFAULT_WORKSPACE"; do
     if [[ -n $candidate ]] && has_workspace "$candidate"; then
       printf '%s' "$candidate"
       return
@@ -98,11 +98,11 @@ mirror_host_options() {
 # removals on the host take effect on the next open.
 mirror_user_options() {
   local names=() values=() name i
-  for name in $(agent_tmux show-options -g 2>/dev/null | awk '$1 ~ /^@llm-agent-/ { print $1 }'); do
+  for name in $(agent_tmux show-options -g 2>/dev/null | awk '$1 ~ /^@greenroom-/ { print $1 }'); do
     chain set-option -gu "$name"
   done
   while read -r name _; do
-    [[ $name == @llm-agent-* ]] && names+=("$name")
+    [[ $name == @greenroom-* ]] && names+=("$name")
   done < <(tmux show-options -g)
   ((${#names[@]})) || return
   IFS=$FIELD_SEPARATOR read -r -d '' -a values < <(read_raw_options "${names[@]}")
@@ -112,10 +112,10 @@ mirror_user_options() {
 }
 
 push_state() {
-  chain set-option -g @llm_agent_key "$KEY"
-  chain set-option -g @llm_agent_new_key "$NEW_KEY"
-  chain set-option -g @llm_agent_menu_key "$MENU_KEY"
-  chain set-option -g @llm_agent_default "$DEFAULT_AGENT"
+  chain set-option -g @greenroom_key "$KEY"
+  chain set-option -g @greenroom_new_key "$NEW_KEY"
+  chain set-option -g @greenroom_menu_key "$MENU_KEY"
+  chain set-option -g @greenroom_default "$DEFAULT_AGENT"
 }
 
 agent_menu() {
@@ -127,14 +127,14 @@ agent_menu() {
     key=$(menu_shortcut "$name" "$used")
     used+=$key
     # Escaped, so new-window -c expands the origin itself when the item runs.
-    spawn="new-window -c '#{@llm_agent_origin}' -n $(quote "$name") $(quote "$(agent_command "$name")")"
+    spawn="new-window -c '#{@greenroom_origin}' -n $(quote "$name") $(quote "$(agent_command "$name")")"
     AGENT_MENU+=("$name" "$key" "$(format_escape "$spawn")")
   done
 }
 
 push_bindings() {
   local prefix prefix2 binding
-  for binding in $(agent_tmux show-option -gqv @llm_agent_bound 2>/dev/null); do
+  for binding in $(agent_tmux show-option -gqv @greenroom_bound 2>/dev/null); do
     chain unbind-key -T "${binding%%:*}" "${binding#*:}"
   done
 
@@ -149,7 +149,7 @@ push_bindings() {
     "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'"
   agent_menu
   chain_bind prefix "$NEW_KEY" "${AGENT_MENU[@]}"
-  chain set-option -g @llm_agent_bound "$BOUND"
+  chain set-option -g @greenroom_bound "$BOUND"
 }
 
 # Bells reach the host through alert.sh; see docs/design.md (D9).
@@ -159,7 +159,7 @@ push_alert_hooks() {
   # With the default "other", a bell in the current window of a closed popup
   # would not run the hook.
   chain set-option -g bell-action any
-  chain set-option -g @llm_agent_host "${TMUX%%,*}"
+  chain set-option -g @greenroom_host "${TMUX%%,*}"
   chain set-hook -g "alert-bell[$ALERT_HOOK_INDEX]" "run-shell -b $(quote "$alert bell '#{window_id}'")"
   for hook in client-attached client-session-changed session-window-changed window-unlinked session-closed; do
     chain set-hook -g "$hook[$ALERT_HOOK_INDEX]" "run-shell -b $(quote "$alert refresh")"
@@ -191,7 +191,7 @@ main() {
   agent_tmux list-sessions >/dev/null 2>&1 || fresh=1
   workspace=$(pick_workspace "${1:-}")
   # A host alert left over from an agent server that has since exited.
-  [[ -n $fresh ]] && tmux set-option -gu @llm_agent_alert
+  [[ -n $fresh ]] && tmux set-option -gu @greenroom_alert
 
   chain start-server
   [[ -n $fresh ]] && mirror_host_options
@@ -204,11 +204,11 @@ main() {
     chain new-session -d -s "$workspace" -c "$(format_escape "$origin")" -n "$DEFAULT_AGENT" \
       "$(agent_command "$DEFAULT_AGENT")"
   fi
-  chain set-option -t "=$workspace:" @llm_agent_origin "$origin"
+  chain set-option -t "=$workspace:" @greenroom_origin "$origin"
 
   # Another client may have created the workspace first; that is fine.
   if ! agent_tmux "${CHAIN[@]}" && ! has_workspace "$workspace"; then
-    printf 'tmux-llm-agent: could not prepare workspace %s. Press any key.' "$workspace"
+    printf 'tmux-greenroom: could not prepare workspace %s. Press any key.' "$workspace"
     read -rsn1
     exit 1
   fi

@@ -1,6 +1,8 @@
-# tmux-llm-agent 설계
+# tmux-greenroom 설계
 
 상태: M1·M2 구현 완료 (2026-09-30), P1 bell 알림·P2 agent로 보내기 구현 (2026-10-01). P3는 clipboard로 충분해 구현하지 않고, P4는 뺐다.
+
+이름: 처음 이름은 tmux-llm-agent였다. 공개 전에 tmux-greenroom으로 바꿨다. 출연자가 무대에 오르기 전에 대기하는 green room처럼, agent들이 popup 밖에서 돌며 기다린다는 뜻이다. tmux-cuecard와 같은 무대 비유다.
 
 ## 목표
 
@@ -20,7 +22,7 @@
 | 용어         | 뜻                                                    |
 | ------------ | ----------------------------------------------------- |
 | host server  | 사용자가 평소 쓰는 tmux server                        |
-| agent server | 이 플러그인 전용 tmux server, `tmux -L llm-agent`     |
+| agent server | 이 플러그인 전용 tmux server, `tmux -L greenroom`     |
 | workspace    | agent server의 session 하나. popup 하나에 대응        |
 | agent        | workspace의 window 하나. agent CLI 하나를 실행        |
 | origin pane  | popup을 연 host pane. 새 agent의 작업 디렉토리 기준   |
@@ -28,7 +30,7 @@
 ## 구조
 
 ```
- host server (your tmux)                 agent server (tmux -L llm-agent)
+ host server (your tmux)                 agent server (tmux -L greenroom)
 ┌────────────────────────────────┐      ┌─────────────────────────────┐
 │ session "work"                 │      │ workspace "main"            │
 │  └ popup: attach.sh ───────────┼─────▶│  ├ window 0: claude         │
@@ -40,7 +42,7 @@
 ```
 
 - 어느 host session에서 열든 같은 agent server에 붙는다. 두 host client가 같은 workspace를 동시에 열 수도 있다.
-- popup 안의 프로세스는 `tmux -L llm-agent attach` 하나뿐이다. agent 프로세스는 agent server가 소유한다.
+- popup 안의 프로세스는 `tmux -L greenroom attach` 하나뿐이다. agent 프로세스는 agent server가 소유한다.
 
 ## 핵심 결정
 
@@ -75,7 +77,7 @@
   - 실측: 검증 근거 1~3.
   - 사실: tmux 3.3a `server-client.c`의 `server_client_handle_key`는 key table 조회보다 `overlay_key`를 먼저 호출한다 (조사, 리뷰가 교차 확인).
 - 닫기 키는 host의 열기 키와 같은 키를 agent server에서 `detach-client`로 바인딩해 만든다. 같은 키가 열고 닫는 토글이 된다.
-- 바인딩한 키는 양쪽 server의 `@llm_agent_bound`에 기록하고, 다음 적용 때 먼저 unbind한다. 키 옵션을 바꿔도 옛 키가 남지 않는다.
+- 바인딩한 키는 양쪽 server의 `@greenroom_bound`에 기록하고, 다음 적용 때 먼저 unbind한다. 키 옵션을 바꿔도 옛 키가 남지 않는다.
 
 ### D4. workspace는 session, agent는 window
 
@@ -89,12 +91,12 @@
 
 ### D5. agent server는 사용자 tmux.conf를 읽지 않는다
 
-- agent server는 시작할 때 `-f conf/agent-server.conf`와, 설정돼 있으면 `-f <@llm-agent-config>`를 읽는다.
+- agent server는 시작할 때 `-f conf/agent-server.conf`와, 설정돼 있으면 `-f <@greenroom-config>`를 읽는다.
   - `-f`를 여러 번 주면 순서대로 모두 읽고, 앞 파일의 에러가 뒤 파일이나 이어지는 명령을 끊지 않는다 (실측 10). 사용자 conf의 오타가 workspace 준비를 막지 않는다.
 - 이유: 사용자 conf를 읽으면 TPM이 모든 플러그인을 agent server에서 다시 실행한다. tmux-continuum 같은 플러그인은 host의 저장본을 agent server 상태로 덮어쓸 수 있다.
-- popup 안에서 쓰고 싶은 플러그인은 `@llm-agent-config` 파일에서 직접 `run-shell`한다. 예: `run-shell ~/.tmux/plugins/tmux-cuecard/cuecard.tmux`.
-- `conf/agent-server.conf`는 `@llm_agent_server`를 설정하고, `llm-agent.tmux`는 이 값이 있으면 아무것도 하지 않는다. 사용자가 전체 conf를 지정해도 이 플러그인이 agent server 안에서 host 바인딩을 만들지는 않는다. 다른 플러그인의 부작용은 막지 못한다.
-  - 초안의 환경 변수 방식(`LLM_AGENT_SERVER=1`)은 버렸다. agent pane에서 띄운 다른 tmux server로 새어 나가 거기서 플러그인이 꺼진다 (리뷰 실측).
+- popup 안에서 쓰고 싶은 플러그인은 `@greenroom-config` 파일에서 직접 `run-shell`한다. 예: `run-shell ~/.tmux/plugins/tmux-cuecard/cuecard.tmux`.
+- `conf/agent-server.conf`는 `@greenroom_server`를 설정하고, `greenroom.tmux`는 이 값이 있으면 아무것도 하지 않는다. 사용자가 전체 conf를 지정해도 이 플러그인이 agent server 안에서 host 바인딩을 만들지는 않는다. 다른 플러그인의 부작용은 막지 못한다.
+  - 초안의 환경 변수 방식(`GREENROOM_SERVER=1`)은 버렸다. agent pane에서 띄운 다른 tmux server로 새어 나가 거기서 플러그인이 꺼진다 (리뷰 실측).
 
 ### D6. 메뉴는 `display-menu`, 외부 의존성 없음
 
@@ -105,8 +107,8 @@
 
 ### D7. 사용자 옵션은 여는 때마다 통째로 복사한다
 
-- 옵션 이름공간을 나눈다. `@llm-agent-*`는 사용자 옵션, `@llm_agent_*`는 플러그인 상태다.
-- 여는 때마다 agent server의 `@llm-agent-*`를 모두 지우고 host의 `@llm-agent-*`를 모두 복사한다. host에서 바꾸거나 지운 옵션이 다음 열기에 반영된다.
+- 옵션 이름공간을 나눈다. `@greenroom-*`는 사용자 옵션, `@greenroom_*`는 플러그인 상태다.
+- 여는 때마다 agent server의 `@greenroom-*`를 모두 지우고 host의 `@greenroom-*`를 모두 복사한다. host에서 바꾸거나 지운 옵션이 다음 열기에 반영된다.
 - 값은 paste buffer를 거쳐 읽는다 (`run-shell -C 'set-buffer "#{q:...}"'` 후 `save-buffer -`).
   - 이유: tmux 3.4는 `show-option`, `display-message`, `show-options` 출력에서 `$`를 escape하고 백슬래시는 그대로 둔다. 출력만으로는 원래 값을 되살릴 수 없다 (실측 12). agent 명령에는 `$`가 흔히 들어간다.
   - agent server 안의 `run-agent.sh`도 같은 방식으로 명령을 읽는다.
@@ -125,18 +127,18 @@
 
 - 알림의 근원은 agent가 내는 터미널 bell 하나다. 플러그인은 agent CLI 설정을 건드리지 않는다. bell을 내게 할지는 사용자가 agent 쪽(예: 작업 종료 hook)에서 정한다.
 - tmux는 아무 client도 보고 있지 않은 window에만 bell flag를 세우고, client가 그 window를 보면 지운다 (실측 17). 그래서 "놓친 bell" 목록은 `window_bell_flag`가 1인 window 그대로다. 플러그인이 따로 상태를 들고 있지 않는다.
-- agent server의 `alert-bell` hook이 `alert.sh bell`을, attach·전환·window 종료 hook들이 `alert.sh refresh`를 실행한다. `alert.sh`는 목록을 host의 `@llm_agent_alert`에 쓰고, bell일 때는 host client마다 `display-message`를 띄운다.
+- agent server의 `alert-bell` hook이 `alert.sh bell`을, attach·전환·window 종료 hook들이 `alert.sh refresh`를 실행한다. `alert.sh`는 목록을 host의 `@greenroom_alert`에 쓰고, bell일 때는 host client마다 `display-message`를 띄운다.
 - agent server는 `bell-action any`로 둔다. 기본값 `other`에서는 popup이 닫힌 workspace의 현재 window bell에 hook이 돌지 않는다 (실측 18).
-- host socket은 `attach.sh`가 여는 때마다 `@llm_agent_host`에 기록한다. 알림은 마지막으로 연 host로 간다.
-- status line 표시는 사용자가 `status-right`에 `#{@llm_agent_alert}` 조건부 구간을 넣는다. 사용자 status line을 플러그인이 고치지 않는다. 옵션이 없으면 구간이 비므로 플러그인이 없는 환경에서도 그대로 둘 수 있다.
-- hook은 slot 101(알림), 100(마지막 workspace)에 둔다. `@llm-agent-config`가 slot 0에 hook을 걸어도 덮이지 않는다.
+- host socket은 `attach.sh`가 여는 때마다 `@greenroom_host`에 기록한다. 알림은 마지막으로 연 host로 간다.
+- status line 표시는 사용자가 `status-right`에 `#{@greenroom_alert}` 조건부 구간을 넣는다. 사용자 status line을 플러그인이 고치지 않는다. 옵션이 없으면 구간이 비므로 플러그인이 없는 환경에서도 그대로 둘 수 있다.
+- hook은 slot 101(알림), 100(마지막 workspace)에 둔다. `@greenroom-config`가 slot 0에 hook을 걸어도 덮이지 않는다.
 
 ### D10. host 내용 보내기는 host buffer를 거쳐 attach 뒤에 붙여넣는다
 
-- copy-mode의 `pipe-and-cancel`(복사하지 않고 넘기기만 함)이나 `capture-pane`으로 얻은 텍스트를 `send.sh`가 host buffer `llm_agent_send`에 넣고 popup을 연다.
+- copy-mode의 `pipe-and-cancel`(복사하지 않고 넘기기만 함)이나 `capture-pane`으로 얻은 텍스트를 `send.sh`가 host buffer `greenroom_send`에 넣고 popup을 연다.
 - popup의 `attach.sh --paste`가 그 buffer를 agent server로 옮기고, attach 직후 `paste.sh`가 대상 pane에 `paste-buffer -p`(bracketed paste)한다. Enter는 보내지 않는다.
 - 새로 만든 workspace는 agent가 아직 입력을 받지 못할 수 있다. tmux에는 bracketed paste 모드를 알려 주는 format이 없어서, 화면이 그려지고 0.3초 간격 두 번 같을 때까지(최대 10초) 기다린 뒤 붙여넣는다. 이미 떠 있는 agent에는 바로 붙여넣는다.
-- 사용자 paste buffer와 clipboard는 건드리지 않는다. 쓰고 난 `llm_agent_send`는 지운다.
+- 사용자 paste buffer와 clipboard는 건드리지 않는다. 쓰고 난 `greenroom_send`는 지운다.
 
 ## 동작 흐름
 
@@ -144,12 +146,12 @@
 
 1. host에서 `prefix + g`를 누른다.
 2. host가 `display-popup -E -d <origin 경로>`로 `attach.sh`를 실행한다.
-3. `attach.sh`가 대상 workspace를 정한다. 순서: 인자, `@llm_agent_last`, `@llm-agent-workspace`(기본 `main`) 중 존재하는 것, 아무 workspace, 없으면 `@llm-agent-workspace`를 새로 만든다.
+3. `attach.sh`가 대상 workspace를 정한다. 순서: 인자, `@greenroom_last`, `@greenroom-workspace`(기본 `main`) 중 존재하는 것, 아무 workspace, 없으면 `@greenroom-workspace`를 새로 만든다.
 4. 준비 명령을 tmux 호출 하나로 보낸다.
    - agent server가 없으면 이때 뜨고, host의 동작 옵션(`default-terminal`, `mouse`, `base-index`, `extended-keys` 등)을 한 번 복사한다.
    - 사용자 옵션 복사 (D7), 상태 옵션 기록, 옛 바인딩 해제와 새 바인딩 (D3).
-   - workspace가 없으면 `@llm-agent-default` agent 하나로 만든다.
-   - workspace에 `@llm_agent_origin`으로 origin 경로를 기록한다.
+   - workspace가 없으면 `@greenroom-default` agent 하나로 만든다.
+   - workspace에 `@greenroom_origin`으로 origin 경로를 기록한다.
 5. `exec tmux -L <socket> attach -t =<workspace>`.
 6. 준비가 실패하고 workspace도 없으면 에러를 출력하고 키 입력을 기다린다. `-E` popup이 에러를 보여 주기 전에 닫히지 않게 한다.
 
@@ -160,9 +162,9 @@
 
 ### agent 추가
 
-- popup 안에서 `prefix + c`를 누르면 agent 메뉴가 뜬다. `@llm-agent-agents` 순서대로, 마지막에 구분선과 `shell`.
+- popup 안에서 `prefix + c`를 누르면 agent 메뉴가 뜬다. `@greenroom-agents` 순서대로, 마지막에 구분선과 `shell`.
 - 단축키는 이름에서 아직 안 쓴 첫 글자다. `display-menu`가 쓰는 `q j k g G`는 건너뛴다.
-- 고른 agent를 `@llm_agent_origin` 경로에서 새 window로 실행한다. window 이름은 agent 이름이다.
+- 고른 agent를 `@greenroom_origin` 경로에서 새 window로 실행한다. window 이름은 agent 이름이다.
 
 ### agent 종료
 
@@ -178,7 +180,7 @@
   - `n` 새 workspace: 이름을 묻고, 현재 workspace의 origin 경로에서 기본 agent 하나로 만든 뒤 전환.
   - `r` 이름 변경, `x` 현재 workspace 삭제(확인 후).
 - workspace 이름에서 `[A-Za-z0-9_-]` 밖의 문자는 `_`로 바꾼다.
-- 마지막으로 본 workspace는 `client-attached`, `client-session-changed`, `session-renamed` hook이 `set-option -gF`로 `@llm_agent_last`에 기록한다. `-F`가 없으면 `#{session_name}`이 글자 그대로 저장된다 (리뷰 실측).
+- 마지막으로 본 workspace는 `client-attached`, `client-session-changed`, `session-renamed` hook이 `set-option -gF`로 `@greenroom_last`에 기록한다. `-F`가 없으면 `#{session_name}`이 글자 그대로 저장된다 (리뷰 실측).
 
 ## 키 바인딩
 
@@ -203,38 +205,38 @@ popup 안 (agent server):
 | `prefix` + `d`             | popup 닫기 (tmux 기본)           |
 
 - `g`/`G`는 stock tmux와 현재 사용자 conf 양쪽에서 비어 있는 키다 (`list-keys -T prefix`로 확인). 옵션으로 바꾼다.
-- `@llm-agent-root-key`(예: `M-g`)를 지정하면 prefix 없이 토글한다. 이 키는 agent server에도 바인딩되므로 agent CLI에는 전달되지 않는다.
+- `@greenroom-root-key`(예: `M-g`)를 지정하면 prefix 없이 토글한다. 이 키는 agent server에도 바인딩되므로 agent CLI에는 전달되지 않는다.
 
 ## 옵션
 
 | 옵션                       | 기본값                         | 설명                                    |
 | -------------------------- | ------------------------------ | --------------------------------------- |
-| `@llm-agent-key`           | `g`                            | popup 토글 키 (prefix table)            |
-| `@llm-agent-root-key`      | 없음                           | prefix 없이 토글하는 키 (root table)    |
-| `@llm-agent-menu-key`      | `G`                            | workspace 메뉴 키                       |
-| `@llm-agent-new-key`       | `c`                            | popup 안 agent 메뉴 키                  |
-| `@llm-agent-send-key`      | `a`                            | 선택 영역 보내기 키 (copy-mode)         |
-| `@llm-agent-send-pane-key` | `S`                            | pane 화면 보내기 키 (prefix table)      |
-| `@llm-agent-agents`        | `claude codex gemini opencode` | agent 메뉴 항목과 순서                  |
-| `@llm-agent-<name>-cmd`    | `<name>`                       | agent 실행 명령                         |
-| `@llm-agent-shell-cmd`     | login shell                    | 메뉴의 `shell` 항목이 실행할 명령       |
-| `@llm-agent-default`       | `claude`                       | 새 workspace의 첫 agent                 |
-| `@llm-agent-workspace`     | `main`                         | 기본 workspace 이름                     |
-| `@llm-agent-width`         | `80%`                          | popup 너비                              |
-| `@llm-agent-height`        | `80%`                          | popup 높이                              |
-| `@llm-agent-x`             | `C`                            | popup 가로 위치                         |
-| `@llm-agent-y`             | `C`                            | popup 세로 위치                         |
-| `@llm-agent-border-lines`  | `rounded`                      | popup 테두리 (`popup-border-lines` 값)  |
-| `@llm-agent-socket`        | `llm-agent`                    | agent server socket 이름 (`-L`)         |
-| `@llm-agent-config`        | 없음                           | agent server 시작 시 추가로 읽을 conf   |
+| `@greenroom-key`           | `g`                            | popup 토글 키 (prefix table)            |
+| `@greenroom-root-key`      | 없음                           | prefix 없이 토글하는 키 (root table)    |
+| `@greenroom-menu-key`      | `G`                            | workspace 메뉴 키                       |
+| `@greenroom-new-key`       | `c`                            | popup 안 agent 메뉴 키                  |
+| `@greenroom-send-key`      | `a`                            | 선택 영역 보내기 키 (copy-mode)         |
+| `@greenroom-send-pane-key` | `S`                            | pane 화면 보내기 키 (prefix table)      |
+| `@greenroom-agents`        | `claude codex gemini opencode` | agent 메뉴 항목과 순서                  |
+| `@greenroom-<name>-cmd`    | `<name>`                       | agent 실행 명령                         |
+| `@greenroom-shell-cmd`     | login shell                    | 메뉴의 `shell` 항목이 실행할 명령       |
+| `@greenroom-default`       | `claude`                       | 새 workspace의 첫 agent                 |
+| `@greenroom-workspace`     | `main`                         | 기본 workspace 이름                     |
+| `@greenroom-width`         | `80%`                          | popup 너비                              |
+| `@greenroom-height`        | `80%`                          | popup 높이                              |
+| `@greenroom-x`             | `C`                            | popup 가로 위치                         |
+| `@greenroom-y`             | `C`                            | popup 세로 위치                         |
+| `@greenroom-border-lines`  | `rounded`                      | popup 테두리 (`popup-border-lines` 값)  |
+| `@greenroom-socket`        | `greenroom`                    | agent server socket 이름 (`-L`)         |
+| `@greenroom-config`        | 없음                           | agent server 시작 시 추가로 읽을 conf   |
 
-- host 키(`@llm-agent-key`, `-root-key`, `-menu-key`)와 popup 크기·위치·테두리는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.
+- host 키(`@greenroom-key`, `-root-key`, `-menu-key`)와 popup 크기·위치·테두리는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.
 - 나머지는 여는 때마다 읽는다. agent server 쪽 키 바인딩도 여는 때마다 다시 만든다.
 
 ## 파일 구성
 
 ```
-llm-agent.tmux              TPM entry: bind host keys
+greenroom.tmux              TPM entry: bind host keys
 conf/agent-server.conf      agent server defaults: marker, status line, hooks
 scripts/helpers.sh          option lookup, quoting, raw option reads
 scripts/attach.sh           popup job: pick and prepare a workspace, attach
@@ -313,10 +315,10 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 - agent server의 `prefix`는 전역 하나, origin 경로는 workspace당 하나다. 설정이 다른 host 둘이 같은 agent server를 쓰면 마지막에 연 host 값이 이긴다.
 - agent server의 환경 변수는 처음 띄운 popup job의 환경으로 고정된다. pane 안에서 바꾼 PATH(nvm, direnv 등)는 agent에 닿지 않는다. login shell 실행(D8)이 profile의 PATH까지는 채운다.
 - `conf/agent-server.conf`는 agent server 시작 때만 읽는다. 플러그인을 업그레이드하면 agent server를 재시작해야 conf 변경이 반영된다.
-- `@llm-agent-<name>-cmd`는 셸로 실행된다. 사용자 conf 값이라 신뢰 경계 안이다.
-- bell 알림은 마지막으로 popup을 연 host server로만 간다. popup이 닫힌 채 agent server가 끝나면 host의 `@llm_agent_alert`가 남는다. 다음에 popup을 열 때 지운다.
+- `@greenroom-<name>-cmd`는 셸로 실행된다. 사용자 conf 값이라 신뢰 경계 안이다.
+- bell 알림은 마지막으로 popup을 연 host server로만 간다. popup이 닫힌 채 agent server가 끝나면 host의 `@greenroom_alert`가 남는다. 다음에 popup을 열 때 지운다.
 - 새 workspace로 보내는 텍스트는 화면이 잠잠해지는 것을 보고 붙여넣는 추정 방식이다. agent가 화면을 다 그린 뒤에도 입력을 늦게 받기 시작하면 앞부분이 빠질 수 있다.
-- 테스트는 항상 고유한 `-L` socket을 쓰고, 기본 server와 실제 `llm-agent` socket에는 접근하지 않는다.
+- 테스트는 항상 고유한 `-L` socket을 쓰고, 기본 server와 실제 `greenroom` socket에는 접근하지 않는다.
 
 ## 단계 계획
 
@@ -327,7 +329,7 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 
 ### M2. 여러 workspace (완료)
 
-- workspace 메뉴(목록·생성·이름 변경·삭제), `@llm_agent_last` hook, 이름 정리.
+- workspace 메뉴(목록·생성·이름 변경·삭제), `@greenroom_last` hook, 이름 정리.
 - 테스트: 생성과 전환, 토글이 마지막 workspace를 여는지, host 메뉴 키, 다른 workspace가 있을 때 마지막 agent 종료.
 
 ### P1. bell 알림 (완료)
@@ -347,7 +349,7 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 
 ### P4. agent resume 항목 (뺌)
 
-- agent에 들어가 resume하면 되고, `claude --continue` 같은 항목은 기존 옵션으로 만들 수 있다 (`@llm-agent-agents`에 이름 추가, `@llm-agent-<name>-cmd`에 명령).
+- agent에 들어가 resume하면 되고, `claude --continue` 같은 항목은 기존 옵션으로 만들 수 있다 (`@greenroom-agents`에 이름 추가, `@greenroom-<name>-cmd`에 명령).
 
 ## 요구사항
 
