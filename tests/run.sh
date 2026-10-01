@@ -63,6 +63,7 @@ while IFS= read -r line; do
   case $line in
     quit) exit 0 ;;
     fail) exit 3 ;;
+    bell) printf '\a' ;;
   esac
 done
 EOF
@@ -421,6 +422,83 @@ test_workspace_menu_kills_the_workspace() {
 test_default_workspace_name_is_cleaned() {
   start_host "set -g @llm-agent-workspace 'my.proj'"
   open_popup my_proj
+}
+
+host_alert() {
+  "${HOST[@]}" show-option -gqv @llm_agent_alert
+}
+
+host_alert_is() {
+  [[ $(host_alert) == "$1" ]]
+}
+
+test_bell_in_a_closed_popup_alerts_the_host() {
+  start_host
+  open_popup || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${AGENT[@]}" send-keys -t =main:claude bell Enter
+  wait_for host_alert_is 'claude@main' || fail "host alert: [$(host_alert)]" || return
+  wait_for screen_has 'llm-agent: claude@main rang the bell' || fail "no message on the host" || return
+  open_popup || return
+  wait_for host_alert_is '' || fail "alert not cleared after opening: [$(host_alert)]"
+}
+
+test_bell_in_the_visible_agent_is_not_announced() {
+  start_host
+  open_popup || return
+  "${AGENT[@]}" send-keys -t =main:claude bell Enter
+  sleep 1
+  host_alert_is '' || fail "host alert: [$(host_alert)]"
+}
+
+# The snippet README.md gives for status-right.
+STATUS_SNIPPET='#{?@llm_agent_alert,#[fg=black#,bg=yellow#,bold] #{@llm_agent_alert} #[default],}'
+
+test_status_snippet_shows_only_an_alert() {
+  start_host
+  [[ -z $("${HOST[@]}" display-message -p "$STATUS_SNIPPET") ]] || fail "renders without an alert" || return
+  "${HOST[@]}" set-option -g @llm_agent_alert 'claude@main'
+  [[ $("${HOST[@]}" display-message -p "$STATUS_SNIPPET") == '#[fg=black,bg=yellow,bold] claude@main #[default]' ]] ||
+    fail "rendered: $("${HOST[@]}" display-message -p "$STATUS_SNIPPET")"
+}
+
+agent_pane_has() {
+  "${AGENT[@]}" capture-pane -p -t "=$1:" 2>/dev/null | grep -qF -- "$2"
+}
+
+host_buffers() {
+  "${HOST[@]}" list-buffers -F '#{buffer_name}' 2>/dev/null
+}
+
+test_selection_is_sent_to_the_agent() {
+  start_host
+  open_popup || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  type_text 'echo SEND-ME-123'
+  press Enter
+  wait_for screen_has 'SEND-ME-123' || fail "host pane output not shown" || return
+  "${HOST[@]}" copy-mode -t host: \; \
+    send-keys -t host: -X search-backward 'SEND-ME-123' \; \
+    send-keys -t host: -X begin-selection \; \
+    send-keys -t host: -X end-of-line
+  press a
+  wait_for popup_on main || fail "popup did not open" || return
+  wait_for agent_pane_has main 'SEND-ME-123' || fail "text did not reach the agent" || return
+  [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
+}
+
+test_pane_screen_is_sent_to_a_new_workspace() {
+  start_host
+  type_text 'echo PANE-MARKER-9'
+  press Enter
+  wait_for screen_has 'PANE-MARKER-9' || fail "host pane output not shown" || return
+  press C-a S
+  wait_for popup_on main || fail "popup did not open" || return
+  wait_for agent_pane_has main 'STUB claude in' || fail "agent did not start" || return
+  wait_for agent_pane_has main 'PANE-MARKER-9' || fail "screen did not reach the agent" || return
+  [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
 }
 
 # --- runner ------------------------------------------------------------------

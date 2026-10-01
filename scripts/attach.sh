@@ -9,6 +9,8 @@ MIRRORED_OPTIONS=(default-terminal history-limit mouse mode-keys status-keys
   base-index pane-base-index escape-time extended-keys set-clipboard)
 # display-menu uses these keys itself.
 RESERVED_MENU_KEYS=qjkgG
+# Hook array slots this plugin owns; conf/agent-server.conf uses 100.
+ALERT_HOOK_INDEX=101
 
 SOCKET=$(get_tmux_option @llm-agent-socket llm-agent)
 KEY=$(get_tmux_option @llm-agent-key g)
@@ -150,22 +152,55 @@ push_bindings() {
   chain set-option -g @llm_agent_bound "$BOUND"
 }
 
+# Bells reach the host through alert.sh; see docs/design.md (D9).
+push_alert_hooks() {
+  local alert hook
+  alert=$(quote "$SCRIPTS_DIR/alert.sh")
+  # With the default "other", a bell in the current window of a closed popup
+  # would not run the hook.
+  chain set-option -g bell-action any
+  chain set-option -g @llm_agent_host "${TMUX%%,*}"
+  chain set-hook -g "alert-bell[$ALERT_HOOK_INDEX]" "run-shell -b $(quote "$alert bell '#{window_id}'")"
+  for hook in client-attached client-session-changed session-window-changed window-unlinked session-closed; do
+    chain set-hook -g "$hook[$ALERT_HOOK_INDEX]" "run-shell -b $(quote "$alert refresh")"
+  done
+}
+
+# Moves the text from send.sh into the agent server and pastes it after
+# attach, into the active pane of the workspace.
+paste_after_attach() {
+  local workspace=$1 created=$2 pane mode=now
+  tmux show-buffer -b "$SEND_BUFFER" >/dev/null 2>&1 || return 0
+  [[ -n $created ]] && mode=wait
+  pane=$(agent_tmux display-message -p -t "=$workspace:" '#{pane_id}')
+  tmux save-buffer -b "$SEND_BUFFER" - | agent_tmux load-buffer -b "$SEND_BUFFER" -
+  tmux delete-buffer -b "$SEND_BUFFER"
+  ATTACH+=(';' run-shell -b "$(quote "$SCRIPTS_DIR/paste.sh") $(quote "$pane") $mode")
+}
+
 main() {
-  local open_menu='' fresh='' workspace origin=$PWD attach
-  if [[ ${1:-} == --menu ]]; then
-    open_menu=1
+  local open_menu='' paste='' fresh='' created='' workspace origin=$PWD
+  while [[ ${1:-} == --* ]]; do
+    case $1 in
+      --menu) open_menu=1 ;;
+      --paste) paste=1 ;;
+    esac
     shift
-  fi
+  done
 
   agent_tmux list-sessions >/dev/null 2>&1 || fresh=1
   workspace=$(pick_workspace "${1:-}")
+  # A host alert left over from an agent server that has since exited.
+  [[ -n $fresh ]] && tmux set-option -gu @llm_agent_alert
 
   chain start-server
   [[ -n $fresh ]] && mirror_host_options
   mirror_user_options
   push_state
   push_bindings
+  push_alert_hooks
   if [[ -n $fresh ]] || ! has_workspace "$workspace"; then
+    created=1
     chain new-session -d -s "$workspace" -c "$(format_escape "$origin")" -n "$DEFAULT_AGENT" \
       "$(agent_command "$DEFAULT_AGENT")"
   fi
@@ -178,11 +213,12 @@ main() {
     exit 1
   fi
 
-  attach=(attach-session -t "=$workspace")
+  ATTACH=(attach-session -t "=$workspace")
   if [[ -n $open_menu ]]; then
-    attach+=(';' run-shell -b "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'")
+    ATTACH+=(';' run-shell -b "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'")
   fi
-  exec env -u TMUX -u TMUX_PANE tmux -L "$SOCKET" "${attach[@]}"
+  [[ -n $paste ]] && paste_after_attach "$workspace" "$created"
+  exec env -u TMUX -u TMUX_PANE tmux -L "$SOCKET" "${ATTACH[@]}"
 }
 
 main "$@"

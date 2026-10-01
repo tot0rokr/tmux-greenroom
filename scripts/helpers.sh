@@ -4,6 +4,8 @@
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(dirname "$SCRIPTS_DIR")"
 FIELD_SEPARATOR=$'\037'
+# Carries text sent to an agent: a host buffer first, then an agent server one.
+SEND_BUFFER=llm_agent_send
 
 get_tmux_option() {
   local value
@@ -75,4 +77,16 @@ take_pending_name() {
 # The shell command a window runs to start an agent.
 agent_command() {
   printf '%s %s' "$(quote "$SCRIPTS_DIR/run-agent.sh")" "$(quote "$1")"
+}
+
+# Fills POPUP with the host display-popup command; $1 is the start directory,
+# which tmux expands as a format.
+popup_args() {
+  POPUP=(display-popup -E -d "$1"
+    -w "$(get_tmux_option @llm-agent-width 80%)"
+    -h "$(get_tmux_option @llm-agent-height 80%)"
+    -x "$(get_tmux_option @llm-agent-x C)"
+    -y "$(get_tmux_option @llm-agent-y C)"
+    -b "$(get_tmux_option @llm-agent-border-lines rounded)"
+    -T ' agents ')
 }

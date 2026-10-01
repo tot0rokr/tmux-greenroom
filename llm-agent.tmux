@@ -3,18 +3,17 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CURRENT_DIR/scripts/helpers.sh"
 
-POPUP=()
 BOUND=''
 
-bind_popup() {
+bind_key() {
   local table=$1 key=$2
   shift 2
-  tmux bind-key -T "$table" "$(tmux_arg "$key")" "${POPUP[@]}" "$*"
+  tmux bind-key -T "$table" "$(tmux_arg "$key")" "$@"
   BOUND+=" $table:$key"
 }
 
 main() {
-  local root_key attach binding
+  local root_key send_key attach send binding
   # The agent server can be pointed at a config that loads this plugin again.
   if [[ -n $(get_tmux_option @llm_agent_server '') ]]; then
     return
@@ -26,20 +25,24 @@ main() {
   done
 
   attach=$(quote "$SCRIPTS_DIR/attach.sh")
-  POPUP=(display-popup -E -d '#{pane_current_path}'
-    -w "$(get_tmux_option @llm-agent-width 80%)"
-    -h "$(get_tmux_option @llm-agent-height 80%)"
-    -x "$(get_tmux_option @llm-agent-x C)"
-    -y "$(get_tmux_option @llm-agent-y C)"
-    -b "$(get_tmux_option @llm-agent-border-lines rounded)"
-    -T ' agents ')
-
-  bind_popup prefix "$(get_tmux_option @llm-agent-key g)" "$attach"
+  popup_args '#{pane_current_path}'
+  bind_key prefix "$(get_tmux_option @llm-agent-key g)" "${POPUP[@]}" "$attach"
   root_key=$(get_tmux_option @llm-agent-root-key '')
   if [[ -n $root_key ]]; then
-    bind_popup root "$root_key" "$attach"
+    bind_key root "$root_key" "${POPUP[@]}" "$attach"
   fi
-  bind_popup prefix "$(get_tmux_option @llm-agent-menu-key G)" "$attach --menu"
+  bind_key prefix "$(get_tmux_option @llm-agent-menu-key G)" "${POPUP[@]}" "$attach --menu"
+
+  # Both commands are format-expanded when they run.
+  send=$(format_escape "$(quote "$SCRIPTS_DIR/send.sh")")
+  send_key=$(get_tmux_option @llm-agent-send-key a)
+  bind_key copy-mode "$send_key" send-keys -X pipe-and-cancel \
+    "$send selection '#{client_name}' #{q:pane_current_path}"
+  bind_key copy-mode-vi "$send_key" send-keys -X pipe-and-cancel \
+    "$send selection '#{client_name}' #{q:pane_current_path}"
+  bind_key prefix "$(get_tmux_option @llm-agent-send-pane-key S)" run-shell -b \
+    "$send pane '#{client_name}' #{q:pane_current_path} '#{pane_id}'"
+
   tmux set-option -g @llm_agent_bound "$BOUND"
 }
 

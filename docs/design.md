@@ -1,6 +1,6 @@
 # tmux-llm-agent 설계
 
-상태: M1·M2 구현 완료, 2026-09-30. 제안 P1~P4는 미착수.
+상태: M1·M2 구현 완료 (2026-09-30), P1 bell 알림·P2 agent로 보내기 구현 (2026-10-01). P3는 clipboard로 충분해 구현하지 않고, P4는 뺐다.
 
 ## 목표
 
@@ -121,6 +121,23 @@
   - wrapper는 `trap : INT`로 Ctrl-C를 견딘다. 무시(`trap '' INT`)가 아니라 handler라서 agent에게 상속되지 않는다.
 - 메뉴에서 PATH에 없는 agent를 비활성으로 표시하는 기능은 버렸다. 검사하는 환경(popup job)과 실행 환경(login shell)의 PATH가 달라 오탐이 난다. 없는 명령은 status 127로 알려 준다.
 
+### D9. bell 알림은 tmux의 bell flag를 그대로 쓴다
+
+- 알림의 근원은 agent가 내는 터미널 bell 하나다. 플러그인은 agent CLI 설정을 건드리지 않는다. bell을 내게 할지는 사용자가 agent 쪽(예: 작업 종료 hook)에서 정한다.
+- tmux는 아무 client도 보고 있지 않은 window에만 bell flag를 세우고, client가 그 window를 보면 지운다 (실측 17). 그래서 "놓친 bell" 목록은 `window_bell_flag`가 1인 window 그대로다. 플러그인이 따로 상태를 들고 있지 않는다.
+- agent server의 `alert-bell` hook이 `alert.sh bell`을, attach·전환·window 종료 hook들이 `alert.sh refresh`를 실행한다. `alert.sh`는 목록을 host의 `@llm_agent_alert`에 쓰고, bell일 때는 host client마다 `display-message`를 띄운다.
+- agent server는 `bell-action any`로 둔다. 기본값 `other`에서는 popup이 닫힌 workspace의 현재 window bell에 hook이 돌지 않는다 (실측 18).
+- host socket은 `attach.sh`가 여는 때마다 `@llm_agent_host`에 기록한다. 알림은 마지막으로 연 host로 간다.
+- status line 표시는 사용자가 `status-right`에 `#{@llm_agent_alert}` 조건부 구간을 넣는다. 사용자 status line을 플러그인이 고치지 않는다. 옵션이 없으면 구간이 비므로 플러그인이 없는 환경에서도 그대로 둘 수 있다.
+- hook은 slot 101(알림), 100(마지막 workspace)에 둔다. `@llm-agent-config`가 slot 0에 hook을 걸어도 덮이지 않는다.
+
+### D10. host 내용 보내기는 host buffer를 거쳐 attach 뒤에 붙여넣는다
+
+- copy-mode의 `pipe-and-cancel`(복사하지 않고 넘기기만 함)이나 `capture-pane`으로 얻은 텍스트를 `send.sh`가 host buffer `llm_agent_send`에 넣고 popup을 연다.
+- popup의 `attach.sh --paste`가 그 buffer를 agent server로 옮기고, attach 직후 `paste.sh`가 대상 pane에 `paste-buffer -p`(bracketed paste)한다. Enter는 보내지 않는다.
+- 새로 만든 workspace는 agent가 아직 입력을 받지 못할 수 있다. tmux에는 bracketed paste 모드를 알려 주는 format이 없어서, 화면이 그려지고 0.3초 간격 두 번 같을 때까지(최대 10초) 기다린 뒤 붙여넣는다. 이미 떠 있는 agent에는 바로 붙여넣는다.
+- 사용자 paste buffer와 clipboard는 건드리지 않는다. 쓰고 난 `llm_agent_send`는 지운다.
+
 ## 동작 흐름
 
 ### popup 열기
@@ -171,6 +188,8 @@ host server:
 | -------------- | ------------------------------- |
 | `prefix` + `g` | 마지막 workspace를 popup으로    |
 | `prefix` + `G` | popup + workspace 메뉴          |
+| `prefix` + `S` | pane 화면을 agent로 보내기      |
+| copy-mode `a`  | 선택 영역을 agent로 보내기      |
 
 popup 안 (agent server):
 
@@ -188,24 +207,26 @@ popup 안 (agent server):
 
 ## 옵션
 
-| 옵션                      | 기본값                         | 설명                                    |
-| ------------------------- | ------------------------------ | --------------------------------------- |
-| `@llm-agent-key`          | `g`                            | popup 토글 키 (prefix table)            |
-| `@llm-agent-root-key`     | 없음                           | prefix 없이 토글하는 키 (root table)    |
-| `@llm-agent-menu-key`     | `G`                            | workspace 메뉴 키                       |
-| `@llm-agent-new-key`      | `c`                            | popup 안 agent 메뉴 키                  |
-| `@llm-agent-agents`       | `claude codex gemini opencode` | agent 메뉴 항목과 순서                  |
-| `@llm-agent-<name>-cmd`   | `<name>`                       | agent 실행 명령                         |
-| `@llm-agent-shell-cmd`    | login shell                    | 메뉴의 `shell` 항목이 실행할 명령       |
-| `@llm-agent-default`      | `claude`                       | 새 workspace의 첫 agent                 |
-| `@llm-agent-workspace`    | `main`                         | 기본 workspace 이름                     |
-| `@llm-agent-width`        | `80%`                          | popup 너비                              |
-| `@llm-agent-height`       | `80%`                          | popup 높이                              |
-| `@llm-agent-x`            | `C`                            | popup 가로 위치                         |
-| `@llm-agent-y`            | `C`                            | popup 세로 위치                         |
-| `@llm-agent-border-lines` | `rounded`                      | popup 테두리 (`popup-border-lines` 값)  |
-| `@llm-agent-socket`       | `llm-agent`                    | agent server socket 이름 (`-L`)         |
-| `@llm-agent-config`       | 없음                           | agent server 시작 시 추가로 읽을 conf   |
+| 옵션                       | 기본값                         | 설명                                    |
+| -------------------------- | ------------------------------ | --------------------------------------- |
+| `@llm-agent-key`           | `g`                            | popup 토글 키 (prefix table)            |
+| `@llm-agent-root-key`      | 없음                           | prefix 없이 토글하는 키 (root table)    |
+| `@llm-agent-menu-key`      | `G`                            | workspace 메뉴 키                       |
+| `@llm-agent-new-key`       | `c`                            | popup 안 agent 메뉴 키                  |
+| `@llm-agent-send-key`      | `a`                            | 선택 영역 보내기 키 (copy-mode)         |
+| `@llm-agent-send-pane-key` | `S`                            | pane 화면 보내기 키 (prefix table)      |
+| `@llm-agent-agents`        | `claude codex gemini opencode` | agent 메뉴 항목과 순서                  |
+| `@llm-agent-<name>-cmd`    | `<name>`                       | agent 실행 명령                         |
+| `@llm-agent-shell-cmd`     | login shell                    | 메뉴의 `shell` 항목이 실행할 명령       |
+| `@llm-agent-default`       | `claude`                       | 새 workspace의 첫 agent                 |
+| `@llm-agent-workspace`     | `main`                         | 기본 workspace 이름                     |
+| `@llm-agent-width`         | `80%`                          | popup 너비                              |
+| `@llm-agent-height`        | `80%`                          | popup 높이                              |
+| `@llm-agent-x`             | `C`                            | popup 가로 위치                         |
+| `@llm-agent-y`             | `C`                            | popup 세로 위치                         |
+| `@llm-agent-border-lines`  | `rounded`                      | popup 테두리 (`popup-border-lines` 값)  |
+| `@llm-agent-socket`        | `llm-agent`                    | agent server socket 이름 (`-L`)         |
+| `@llm-agent-config`        | 없음                           | agent server 시작 시 추가로 읽을 conf   |
 
 - host 키(`@llm-agent-key`, `-root-key`, `-menu-key`)와 popup 크기·위치·테두리는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.
 - 나머지는 여는 때마다 읽는다. agent server 쪽 키 바인딩도 여는 때마다 다시 만든다.
@@ -221,6 +242,9 @@ scripts/run-agent.sh        agent wrapper run by every agent window
 scripts/workspace-menu.sh   workspace menu (agent server)
 scripts/new-workspace.sh    create a workspace from the menu prompt
 scripts/rename-workspace.sh rename a workspace from the menu prompt
+scripts/alert.sh            bell alerts to the host (agent server hooks)
+scripts/send.sh             send a selection or a pane screen (host)
+scripts/paste.sh            paste sent text after attach (agent server)
 tests/run.sh                integration tests on isolated tmux servers
 ```
 
@@ -257,6 +281,10 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 | 14  | `;`로 끝나는 argv 원소                           | 명령 구분자로 먹힘. 끝을 `\;`로 쓰면 값 보존     |
 | 15  | `set-buffer "~/x"`처럼 따옴표 첫 글자가 `~`      | tilde 확장됨 (코드 리뷰 실측). 앞에 `x`를 붙임   |
 | 16  | `list-keys -T prefix g` (키 인자)                | 3.7b는 출력 없음, 3.4는 출력. 테스트는 전체 검색 |
+| 17  | bell flag가 서는 때와 지워지는 때                | 안 보는 window에만 섬. attach·선택하면 지워짐    |
+| 18  | `bell-action other`에서 닫힌 popup의 현재 window | flag는 서지만 `alert-bell` hook이 돌지 않음      |
+| 19  | popup 안에서 복사 (host `set-clipboard on`)      | OSC 52로 바깥 터미널까지 감. host buffer도 생김  |
+| 20  | agent server `copy-command`로 host에 load-buffer | copy-mode 복사가 host paste buffer에 들어감      |
 
 - 12번의 3.4 결과는 `/usr/bin/tmux` 3.4로 측정했다. `show-options -g` 출력도 3.4에서는 `\\$`로 이중 escape되어 source로 되살릴 수 없다.
 
@@ -269,7 +297,7 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 
 ### 통합 테스트
 
-`tests/run.sh` 23개가 tmux 3.7b와 3.4에서, 각각 bash 5.2와 `BASH_COMPAT=3.2`로 모두 통과한다 (실측, 네 조합). origin 경로는 `it's #S $x;`처럼 셸 quoting, tmux format, argv 파싱을 깨는 문자를 담는다. 실제 bash 3.2 바이너리는 설치본이 없어 돌리지 못했다.
+`tests/run.sh` 28개가 tmux 3.7b와 3.4에서, 각각 bash 5.2와 `BASH_COMPAT=3.2`로 모두 통과한다 (실측, 네 조합). origin 경로는 `it's #S $x;`처럼 셸 quoting, tmux format, argv 파싱을 깨는 문자를 담는다. 실제 bash 3.2 바이너리는 설치본이 없어 돌리지 못했다.
 
 ## 선행 사례
 
@@ -286,6 +314,8 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 - agent server의 환경 변수는 처음 띄운 popup job의 환경으로 고정된다. pane 안에서 바꾼 PATH(nvm, direnv 등)는 agent에 닿지 않는다. login shell 실행(D8)이 profile의 PATH까지는 채운다.
 - `conf/agent-server.conf`는 agent server 시작 때만 읽는다. 플러그인을 업그레이드하면 agent server를 재시작해야 conf 변경이 반영된다.
 - `@llm-agent-<name>-cmd`는 셸로 실행된다. 사용자 conf 값이라 신뢰 경계 안이다.
+- bell 알림은 마지막으로 popup을 연 host server로만 간다. popup이 닫힌 채 agent server가 끝나면 host의 `@llm_agent_alert`가 남는다. 다음에 popup을 열 때 지운다.
+- 새 workspace로 보내는 텍스트는 화면이 잠잠해지는 것을 보고 붙여넣는 추정 방식이다. agent가 화면을 다 그린 뒤에도 입력을 늦게 받기 시작하면 앞부분이 빠질 수 있다.
 - 테스트는 항상 고유한 `-L` socket을 쓰고, 기본 server와 실제 `llm-agent` socket에는 접근하지 않는다.
 
 ## 단계 계획
@@ -300,26 +330,24 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 - workspace 메뉴(목록·생성·이름 변경·삭제), `@llm_agent_last` hook, 이름 정리.
 - 테스트: 생성과 전환, 토글이 마지막 workspace를 여는지, host 메뉴 키, 다른 workspace가 있을 때 마지막 agent 종료.
 
-### 제안 (승인 시 진행)
+### P1. bell 알림 (완료)
 
-필요한 항목만 고른다.
+- D9대로 구현. agent CLI 설정은 추가하지 않는다. agent server에는 `bell-action any`만 강제한다.
+- 테스트: 닫힌 popup의 bell이 host 옵션과 메시지로 가고 popup을 열면 지워지는지, 보고 있는 agent의 bell은 알리지 않는지, README의 status line 구간이 알림이 있을 때만 그려지는지.
 
-- P1. 숨겨 둔 agent 알림
-  - 문제: popup을 닫아 둔 사이 agent가 작업을 끝내거나 입력을 기다려도 알 수 없다.
-  - 방법: agent server에 `monitor-bell`과 `alert-bell` hook을 두고, 마지막으로 연 host server에 `display-message`와 상태줄용 옵션(`@llm_agent_alert`)을 설정한다.
-  - 대가: agent server가 host socket을 기억해야 한다. host server가 여럿이면 마지막 host에만 알린다. agent CLI가 bell을 내도록 설정돼 있어야 한다.
-- P2. host 내용을 agent로 보내기
-  - 문제: 에러 로그나 선택 영역을 agent에 넘기려면 복사, popup 열기, 붙여넣기를 따로 해야 한다.
-  - 방법: host copy-mode에서 키 하나로 선택 영역을 마지막 workspace의 활성 agent pane에 bracketed paste하고 popup을 연다. Enter는 누르지 않는다.
-  - 대가: host copy-mode key table에 바인딩이 하나 늘어난다.
-- P3. paste buffer 동기화
-  - 문제: popup 안에서 복사한 내용이 host의 `prefix + ]`로 붙지 않는다.
-  - 방법: agent server copy-mode의 복사 명령을 `copy-pipe`로 바꿔 host server에 `set-buffer`한다.
-  - 대가: host socket 추적이 필요하다 (P1과 공유).
-- P4. agent resume 항목
-  - 문제: agent server가 죽으면 대화 흐름이 끊긴다.
-  - 방법: `@llm-agent-<name>-resume-cmd`(예: `claude --continue`)를 두고 agent 메뉴에 resume 항목을 추가한다.
-  - 대가: agent마다 resume 방식이 달라 옵션이 늘어난다.
+### P2. host 내용을 agent로 보내기 (완료)
+
+- D10대로 구현. copy-mode `a`는 선택 영역, `prefix + S`는 pane에 보이는 화면을 보낸다.
+- 테스트: 이미 떠 있는 agent로 선택 영역 보내기, agent server가 없을 때 pane 화면 보내기(새 workspace 대기 경로), 둘 다 host buffer를 남기지 않는지.
+
+### P3. paste buffer 동기화 (구현 안 함)
+
+- tmux 3.7 이상에서 host가 `set-clipboard on`이면 popup 안 복사가 OSC 52로 바깥 터미널 clipboard에 가고, host도 paste buffer로 저장한다 (실측 19). 추가 구현이 필요 없다.
+- 3.4~3.6용으로는 agent server `copy-command`를 host `load-buffer`로 바꾸는 한 줄이면 된다 (실측 20). 필요해지면 그때 넣는다.
+
+### P4. agent resume 항목 (뺌)
+
+- agent에 들어가 resume하면 되고, `claude --continue` 같은 항목은 기존 옵션으로 만들 수 있다 (`@llm-agent-agents`에 이름 추가, `@llm-agent-<name>-cmd`에 명령).
 
 ## 요구사항
 
