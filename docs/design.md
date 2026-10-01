@@ -104,6 +104,13 @@
 - `display-menu`의 이름과 명령은 format으로 확장된다 (man page). 메뉴 명령에 넣는 문자열은 `#`을 `##`로 escape한다.
 - 셸과 tmux parser 양쪽에 같은 single-quote 규칙(`'\''`)을 쓴다. tmux parser도 sh처럼 인접 quoted 토큰을 이어 붙인다 (실측 11).
 - 사용자가 입력하는 workspace 이름은 `command-prompt`의 `%%%`(따옴표 escape)로 option에 먼저 저장하고, 스크립트가 option에서 읽는다. 입력값이 셸 명령줄을 거치지 않는다.
+- agent 메뉴는 `@greenroom-agents` 목록 하나가 구성과 순서를 모두 정한다. `|`는 구분선이고, `shell`도 자동으로 붙이지 않는 일반 항목이다. 추가·삭제·순서 변경이 옵션 한 줄로 끝난다.
+  - 잘못된 이름은 건너뛰고, 중복 이름은 첫 자리만 남긴다. `@greenroom-default`는 목록과 별개라 목록에 없는 이름도 된다.
+  - 앞·끝·연속 `|`는 플러그인이 지운다. tmux는 앞 구분선을 버리고 연속 구분선을 합치지만 끝 구분선은 그린다 (실측, 3.4·3.7b).
+  - 단축키는 `@greenroom-<name>-key`를 먼저 배정하고, 남은 항목에 자동 단축키를 준다. 항목 단축키는 `display-menu`의 내장 키보다 우선하므로 자동 단축키는 `q j k g G`를 피한다. 화살표 키는 단축키로 발동하지 않으므로 자동 규칙으로 돌린다. 맨 화살표는 3.7b에서, modifier가 붙은 화살표(`S-Up`, `C-Up`, `M-Up`)는 3.4·3.7b 모두 그렇다 (실측). 이름 있는 키는 대소문자를 가리지 않아 `up`도 `Up`이다.
+  - `root`, `send`, `send-pane`, `agents`, `workspaces`는 늘 자동 단축키를 쓴다. 이 이름의 `@greenroom-<name>-key`는 플러그인 키 옵션(`@greenroom-root-key` 등)이라 단축키로 읽으면 두 설정이 서로를 바꾼다.
+  - `;`로 끝나는 단축키(`;`, `M-;`)는 `tmux_arg`를 두 번 거친다. `bind-key`가 명령 인자를 한 번 더 parse하므로, 한 번만 escape하면 `;`가 `display-menu`를 끊고 준비 명령 전체가 실패한다 (실측, 3.4·3.7b).
+  - 첫 항목 이름이 `-`로 시작하면 `display-menu`가 flag로 읽어 실패하므로 항목 앞에 `--`를 둔다. `-`로 시작하는 이름은 비활성으로 그려져서 앞에 `#[default]`를 붙인다 (실측).
 
 ### D7. 사용자 옵션은 여는 때마다 통째로 복사한다
 
@@ -162,8 +169,9 @@
 
 ### agent 추가
 
-- popup 안에서 `prefix + c`를 누르면 agent 메뉴가 뜬다. `@greenroom-agents` 순서대로, 마지막에 구분선과 `shell`.
-- 단축키는 이름에서 아직 안 쓴 첫 글자다. `display-menu`가 쓰는 `q j k g G`는 건너뛴다.
+- popup 안에서 `prefix + c`를 누르면 agent 메뉴가 뜬다. 항목은 `@greenroom-agents` 순서 그대로다. 기본값 `claude codex gemini opencode | shell`은 agent 넷, 구분선, `shell` 순이다.
+- 단축키는 `@greenroom-<name>-key`가 있으면 그 키, 없으면 이름에서 아직 안 쓴 첫 소문자·숫자다. 자동 단축키는 `display-menu`가 쓰는 `q j k g G`를 건너뛴다.
+- 목록이 비면 비활성 항목 `no agents configured` 하나만 보인다.
 - 고른 agent를 `@greenroom_origin` 경로에서 새 window로 실행한다. window 이름은 agent 이름이다.
 
 ### agent 종료
@@ -209,26 +217,27 @@ popup 안 (agent server):
 
 ## 옵션
 
-| 옵션                        | 기본값                         | 설명                                    |
-| --------------------------- | ------------------------------ | --------------------------------------- |
-| `@greenroom-key`            | `g`                            | popup 토글 키 (prefix table)            |
-| `@greenroom-root-key`       | 없음                           | prefix 없이 토글하는 키 (root table)    |
-| `@greenroom-workspaces-key` | `G`                            | workspace 메뉴 키 (host, popup 안 공통) |
-| `@greenroom-agents-key`     | `c`                            | popup 안 agent 메뉴 키                  |
-| `@greenroom-send-key`       | `a`                            | 선택 영역 보내기 키 (copy-mode)         |
-| `@greenroom-send-pane-key`  | `S`                            | pane 화면 보내기 키 (prefix table)      |
-| `@greenroom-agents`         | `claude codex gemini opencode` | agent 메뉴 항목과 순서                  |
-| `@greenroom-<name>-cmd`     | `<name>`                       | agent 실행 명령                         |
-| `@greenroom-shell-cmd`      | login shell                    | 메뉴의 `shell` 항목이 실행할 명령       |
-| `@greenroom-default`        | `claude`                       | 새 workspace의 첫 agent                 |
-| `@greenroom-workspace`      | `main`                         | 기본 workspace 이름                     |
-| `@greenroom-width`          | `80%`                          | popup 너비                              |
-| `@greenroom-height`         | `80%`                          | popup 높이                              |
-| `@greenroom-x`              | `C`                            | popup 가로 위치                         |
-| `@greenroom-y`              | `C`                            | popup 세로 위치                         |
-| `@greenroom-border-lines`   | `rounded`                      | popup 테두리 (`popup-border-lines` 값)  |
-| `@greenroom-socket`         | `greenroom`                    | agent server socket 이름 (`-L`)         |
-| `@greenroom-config`         | 없음                           | agent server 시작 시 추가로 읽을 conf   |
+| 옵션                        | 기본값                                  | 설명                                    |
+| --------------------------- | --------------------------------------- | --------------------------------------- |
+| `@greenroom-key`            | `g`                                     | popup 토글 키 (prefix table)            |
+| `@greenroom-root-key`       | 없음                                    | prefix 없이 토글하는 키 (root table)    |
+| `@greenroom-workspaces-key` | `G`                                     | workspace 메뉴 키 (host, popup 안 공통) |
+| `@greenroom-agents-key`     | `c`                                     | popup 안 agent 메뉴 키                  |
+| `@greenroom-send-key`       | `a`                                     | 선택 영역 보내기 키 (copy-mode)         |
+| `@greenroom-send-pane-key`  | `S`                                     | pane 화면 보내기 키 (prefix table)      |
+| `@greenroom-agents`         | `claude codex gemini opencode \| shell` | agent 메뉴 항목과 순서                  |
+| `@greenroom-<name>-cmd`     | `<name>`                                | agent 실행 명령                         |
+| `@greenroom-<name>-key`     | 자동                                    | agent 메뉴 단축키                       |
+| `@greenroom-shell-cmd`      | login shell                             | 메뉴의 `shell` 항목이 실행할 명령       |
+| `@greenroom-default`        | `claude`                                | 새 workspace의 첫 agent                 |
+| `@greenroom-workspace`      | `main`                                  | 기본 workspace 이름                     |
+| `@greenroom-width`          | `80%`                                   | popup 너비                              |
+| `@greenroom-height`         | `80%`                                   | popup 높이                              |
+| `@greenroom-x`              | `C`                                     | popup 가로 위치                         |
+| `@greenroom-y`              | `C`                                     | popup 세로 위치                         |
+| `@greenroom-border-lines`   | `rounded`                               | popup 테두리 (`popup-border-lines` 값)  |
+| `@greenroom-socket`         | `greenroom`                             | agent server socket 이름 (`-L`)         |
+| `@greenroom-config`         | 없음                                    | agent server 시작 시 추가로 읽을 conf   |
 
 - 메뉴 키 옵션 이름은 `@greenroom-<메뉴>-key` 형식이다. 처음 이름 `@greenroom-new-key`, `@greenroom-menu-key`는 2026-10-01에 지금 이름으로 바꿨고 호환 별칭은 두지 않았다.
 - host 키(`@greenroom-key`, `-root-key`, `-workspaces-key`)와 popup 크기·위치·테두리는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.

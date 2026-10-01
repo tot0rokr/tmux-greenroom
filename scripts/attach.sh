@@ -8,7 +8,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 MIRRORED_OPTIONS=(default-terminal history-limit mouse mode-keys status-keys
   base-index pane-base-index escape-time extended-keys set-clipboard)
 # display-menu uses these keys itself.
-RESERVED_MENU_KEYS=qjkgG
+RESERVED_MENU_KEYS=' q j k g G '
+# display-menu never runs an item shortcut on an arrow key on tmux 3.7, or on
+# an arrow with a modifier (S-Up) on any version. Named keys ignore case.
+ARROW_KEY='^([CcMmSs]-|\^)*([Uu][Pp]|[Dd][Oo][Ww][Nn]|[Ll][Ee][Ff][Tt]|[Rr][Ii][Gg][Hh][Tt])$'
+# For these agent names, @greenroom-<name>-key is one of the plugin's own key
+# options, not a menu shortcut.
+PLUGIN_KEY_NAMES=' root send send-pane agents workspaces '
 # Hook array slots this plugin owns; conf/agent-server.conf uses 100.
 ALERT_HOOK_INDEX=101
 
@@ -17,7 +23,9 @@ KEY=$(get_tmux_option @greenroom-key g)
 ROOT_KEY=$(get_tmux_option @greenroom-root-key '')
 AGENTS_KEY=$(get_tmux_option @greenroom-agents-key c)
 WORKSPACES_KEY=$(get_tmux_option @greenroom-workspaces-key G)
-AGENTS=$(get_tmux_option @greenroom-agents 'claude codex gemini opencode')
+# An empty list is kept: it means no agents, not the default.
+AGENTS=$(tmux show-option -gv @greenroom-agents 2>/dev/null) ||
+  AGENTS='claude codex gemini opencode | shell'
 DEFAULT_AGENT=$(get_tmux_option @greenroom-default claude)
 DEFAULT_WORKSPACE=$(sanitize_name "$(get_tmux_option @greenroom-workspace main)")
 USER_CONFIG=$(get_tmux_option @greenroom-config '')
@@ -44,9 +52,14 @@ chain() {
 
 # Binds a key and remembers it, so the next open can drop stale bindings.
 chain_bind() {
-  local table=$1 key=$2
+  local table=$1 key=$2 args=() arg
   shift 2
-  chain bind-key -T "$table" "$key" "$@"
+  # bind-key parses its command arguments a second time, so an argument that
+  # ends in ';' (a menu shortcut) is escaped once more.
+  for arg in "$@"; do
+    args+=("$(tmux_arg "$arg")")
+  done
+  chain bind-key -T "$table" "$key" "${args[@]}"
   BOUND+=" $table:$key"
 }
 
@@ -70,7 +83,7 @@ pick_workspace() {
   printf '%s' "${first:-$DEFAULT_WORKSPACE}"
 }
 
-# First letter of the name that no earlier item took.
+# First letter of the name that is not in the space-separated used keys.
 menu_shortcut() {
   local name=$1 used=$2 i c
   for ((i = 0; i < ${#name}; i++)); do
@@ -79,7 +92,7 @@ menu_shortcut() {
       [!a-z0-9]) continue ;;
     esac
     case $used in
-      *"$c"*) continue ;;
+      *" $c "*) continue ;;
     esac
     printf '%s' "$c"
     return
@@ -119,16 +132,58 @@ push_state() {
 }
 
 agent_menu() {
-  local used=$RESERVED_MENU_KEYS name key spawn
-  AGENT_MENU=(display-menu -T '#[align=centre] new agent ' -x C -y C)
-  for name in $AGENTS shell; do
-    is_valid_name "$name" || continue
-    [[ $name == shell ]] && AGENT_MENU+=('')
-    key=$(menu_shortcut "$name" "$used")
-    used+=$key
+  local tokens=() names=() gaps=() options=() keys=() claimed=' ' used
+  local token gap='' key label spawn i
+  # read, unlike an unquoted expansion, does not glob a token such as '*'.
+  read -r -d '' -a tokens <<<"$AGENTS"
+  for token in "${tokens[@]}"; do
+    if [[ $token == '|' ]]; then
+      ((${#names[@]})) && gap=1
+      continue
+    fi
+    is_valid_name "$token" || continue
+    case " ${names[*]} " in
+      *" $token "*) continue ;;
+    esac
+    names+=("$token")
+    gaps+=("$gap")
+    options+=("@greenroom-$token-key")
+    gap=''
+  done
+
+  AGENT_MENU=(display-menu -T '#[align=centre] new agent ' -x C -y C --)
+  if ((${#names[@]} == 0)); then
+    AGENT_MENU+=('-no agents configured' '' '')
+    return
+  fi
+
+  # Explicit keys go first, so an automatic shortcut never takes one.
+  IFS=$FIELD_SEPARATOR read -r -d '' -a keys < <(read_raw_options "${options[@]}")
+  for i in "${!names[@]}"; do
+    key=${keys[i]}
+    case $PLUGIN_KEY_NAMES in
+      *" ${names[i]} "*) key='' ;;
+    esac
+    [[ $key =~ $ARROW_KEY ]] && key=''
+    case $claimed in
+      *" $key "*) key='' ;;
+    esac
+    keys[i]=$key
+    [[ -n $key ]] && claimed+="$key "
+  done
+  used=$RESERVED_MENU_KEYS$claimed
+  for i in "${!names[@]}"; do
+    if [[ -z ${keys[i]} ]]; then
+      keys[i]=$(menu_shortcut "${names[i]}" "$used")
+      used+="${keys[i]} "
+    fi
+    [[ -n ${gaps[i]} ]] && AGENT_MENU+=('')
+    label=${names[i]}
+    # display-menu draws a name that starts with '-' as a disabled item.
+    [[ $label == -* ]] && label="#[default]$label"
     # Escaped, so new-window -c expands the origin itself when the item runs.
-    spawn="new-window -c '#{@greenroom_origin}' -n $(quote "$name") $(quote "$(agent_command "$name")")"
-    AGENT_MENU+=("$name" "$key" "$(format_escape "$spawn")")
+    spawn="new-window -c '#{@greenroom_origin}' -n $(quote "${names[i]}") $(quote "$(agent_command "${names[i]}")")"
+    AGENT_MENU+=("$label" "${keys[i]}" "$(format_escape "$spawn")")
   done
 }
 

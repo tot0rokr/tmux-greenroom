@@ -85,14 +85,54 @@ If you set `@greenroom-root-key`, the same key also closes the popup. It is not 
 
 ### Agent menu
 
-`prefix` + `c` lists the agents from `@greenroom-agents`, then a `shell` entry that starts your login shell. The chosen agent opens in a new window, named after the agent. Its directory is the one recorded for the current workspace: the pane that last opened the popup on it.
+`prefix` + `c` lists the agents named in `@greenroom-agents`, in that order. The chosen agent opens in a new window, named after the agent. Its directory is the one recorded for the current workspace: the pane that last opened the popup on it.
 
-The shortcut of each entry is the first letter of its name that no earlier entry took. The letters `q`, `j`, `k`, `g`, and `G` are skipped because `display-menu` uses them itself.
+With the default list, `claude codex gemini opencode | shell`, the menu looks like this:
+
+```
+┌── new agent ─┐
+│ claude   (c) │
+│ codex    (o) │
+│ gemini   (e) │
+│ opencode (p) │
+├──────────────┤
+│ shell    (s) │
+└──────────────┘
+```
+
+- Each word of the list is an agent name, made of letters, digits, `_`, and `-`. Other words are skipped. A name listed twice appears once, at its first place.
+- `|` draws a separator line. A `|` at the start or end of the list, or next to another `|`, is dropped.
+- `shell` starts your login shell, or `@greenroom-shell-cmd` if you set it. It is an ordinary entry and is not added for you: leave it out to drop it, or move it.
+- Any other name runs `@greenroom-<name>-cmd`, or the name itself as a command when that option is not set.
+- An empty list shows a disabled `no agents configured` entry.
+
+`@greenroom-<name>-key` sets the shortcut of an entry to a tmux key name, such as `x`, `X`, `1`, or `M-a`. An entry without one gets the first lowercase letter or digit of its name that no other entry took. That automatic choice skips `q`, `j`, `k`, `g`, and `G`, because `display-menu` uses them itself; an explicit key may take one of them and replaces its built-in action in the menu. An explicit key that an earlier entry already set falls back to the automatic shortcut. So does an arrow key, such as `Up` or `S-Up`, because `display-menu` does not run a shortcut on one.
+
+The agents `root`, `send`, `send-pane`, `agents`, and `workspaces` always get the automatic shortcut. Their `@greenroom-<name>-key` is one of the plugin's own key options, such as `@greenroom-root-key`, and setting it changes that key instead.
+
+For example, to put the shell first and add Aider:
+
+```tmux
+set -g @greenroom-agents 'shell | claude codex aider'
+set -g @greenroom-aider-cmd 'aider --no-auto-commits'
+set -g @greenroom-aider-key 'a'
+set -g @greenroom-codex-key 'x'
+```
+
+```
+┌─ new agent ─┐
+│ shell   (s) │
+├─────────────┤
+│ claude  (c) │
+│ codex   (x) │
+│ aider   (a) │
+└─────────────┘
+```
 
 | Key        | Action                             |
 | ---------- | ---------------------------------- |
 | `Enter`    | Start the highlighted agent        |
-| letter     | Start the agent with that shortcut |
+| shortcut   | Start the agent with that shortcut |
 | `Esc`, `q` | Close the menu                     |
 
 ### Workspace menu
@@ -148,34 +188,35 @@ Shift+Enter reaches the agent inside the popup if your host tmux has `extended-k
 
 ## Options
 
-| Option                      | Default                        | Description                                                           |
-| --------------------------- | ------------------------------ | --------------------------------------------------------------------- |
-| `@greenroom-key`            | `g`                            | Key that opens and closes the popup                                   |
-| `@greenroom-root-key`       | empty                          | Key that opens and closes the popup without the prefix, such as `M-g` |
-| `@greenroom-workspaces-key` | `G`                            | Key for the workspace menu, on the host and inside the popup          |
-| `@greenroom-agents-key`     | `c`                            | Key for the agent menu inside the popup                               |
-| `@greenroom-send-key`       | `a`                            | Copy-mode key that sends the selection to the agent                   |
-| `@greenroom-send-pane-key`  | `S`                            | Key that sends the visible screen of the pane to the agent            |
-| `@greenroom-agents`         | `claude codex gemini opencode` | Agents in the menu, in order                                          |
-| `@greenroom-<name>-cmd`     | `<name>`                       | Command that starts the agent called `<name>`                         |
-| `@greenroom-default`        | `claude`                       | First agent of a new workspace                                        |
-| `@greenroom-workspace`      | `main`                         | Workspace to open when there is no last workspace                     |
-| `@greenroom-width`          | `80%`                          | Popup width                                                           |
-| `@greenroom-height`         | `80%`                          | Popup height                                                          |
-| `@greenroom-x`              | `C`                            | Popup horizontal position                                             |
-| `@greenroom-y`              | `C`                            | Popup vertical position                                               |
-| `@greenroom-border-lines`   | `rounded`                      | Popup border, a `popup-border-lines` value                            |
-| `@greenroom-socket`         | `greenroom`                    | Socket name of the agent server (`tmux -L`)                           |
-| `@greenroom-config`         | empty                          | Extra config file for the agent server                                |
+| Option                      | Default                                 | Description                                                           |
+| --------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| `@greenroom-key`            | `g`                                     | Key that opens and closes the popup                                   |
+| `@greenroom-root-key`       | empty                                   | Key that opens and closes the popup without the prefix, such as `M-g` |
+| `@greenroom-workspaces-key` | `G`                                     | Key for the workspace menu, on the host and inside the popup          |
+| `@greenroom-agents-key`     | `c`                                     | Key for the agent menu inside the popup                               |
+| `@greenroom-send-key`       | `a`                                     | Copy-mode key that sends the selection to the agent                   |
+| `@greenroom-send-pane-key`  | `S`                                     | Key that sends the visible screen of the pane to the agent            |
+| `@greenroom-agents`         | `claude codex gemini opencode \| shell` | Agent menu entries, in order                                          |
+| `@greenroom-<name>-cmd`     | `<name>`                                | Command that starts the agent called `<name>`                         |
+| `@greenroom-<name>-key`     | automatic                               | Shortcut of the agent called `<name>` in the agent menu               |
+| `@greenroom-default`        | `claude`                                | First agent of a new workspace                                        |
+| `@greenroom-workspace`      | `main`                                  | Workspace to open when there is no last workspace                     |
+| `@greenroom-width`          | `80%`                                   | Popup width                                                           |
+| `@greenroom-height`         | `80%`                                   | Popup height                                                          |
+| `@greenroom-x`              | `C`                                     | Popup horizontal position                                             |
+| `@greenroom-y`              | `C`                                     | Popup vertical position                                               |
+| `@greenroom-border-lines`   | `rounded`                               | Popup border, a `popup-border-lines` value                            |
+| `@greenroom-socket`         | `greenroom`                             | Socket name of the agent server (`tmux -L`)                           |
+| `@greenroom-config`         | empty                                   | Extra config file for the agent server                                |
 
-An agent name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` from your login profile applies. `shell` is always in the menu; set `@greenroom-shell-cmd` to run something other than your login shell.
+An agent name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` from your login profile applies. `@greenroom-default` may name any agent, listed in `@greenroom-agents` or not. See [Agent menu](#agent-menu) for the list syntax and `shell`.
 
 ```tmux
 set -g @greenroom-key 'a'
 set -g @greenroom-root-key 'M-a'
 set -g @greenroom-width '90%'
 set -g @greenroom-claude-cmd 'claude --model opus'
-set -g @greenroom-agents 'claude codex aider'
+set -g @greenroom-agents 'claude codex aider | shell'
 set -g @greenroom-aider-cmd 'aider --no-auto-commits'
 ```
 

@@ -93,7 +93,7 @@ start_host() {
       'set -s extended-keys on' \
       "set -as terminal-features ',tmux*:extkeys'" \
       "set -g @greenroom-socket '$ID-agent'" \
-      "set -g @greenroom-agents 'claude codex missing'" \
+      "set -g @greenroom-agents 'claude codex missing | shell'" \
       "set -g @greenroom-claude-cmd '\"$WORK_DIR/stub-agent\" claude'" \
       "set -g @greenroom-codex-cmd '\"$WORK_DIR/stub-agent\" codex'" \
       "set -g @greenroom-missing-cmd 'no-such-agent-binary --flag'"
@@ -410,7 +410,11 @@ test_shell_entry_starts_a_login_shell() {
   press C-a c
   wait_for screen_has 'new agent' || fail "agent menu not shown" || return
   press s
-  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)"
+  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)" || return
+  # exec -l puts a '-' in front of $0.
+  type_text 'echo LOGIN:$0'
+  press Enter
+  wait_for screen_has 'LOGIN:-' || fail "not a login shell"
 }
 
 test_workspace_menu_renames_with_a_clean_name() {
@@ -519,6 +523,325 @@ test_pane_screen_is_sent_to_a_new_workspace() {
   wait_for agent_pane_has main 'STUB claude in' || fail "agent did not start" || return
   wait_for agent_pane_has main 'PANE-MARKER-9' || fail "screen did not reach the agent" || return
   [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
+}
+
+open_agent_menu() {
+  press C-a c
+  wait_for screen_has 'new agent' || fail "agent menu not shown"
+}
+
+# Prints the agent menu as drawn: "name(key)" per item, "|" per separator
+# line, "<blank>" per empty row. Box characters depend on the locale, so rows
+# are found by the columns of the top border.
+menu_items() {
+  local title=' new agent ' lines=() items=() line i top=-1
+  local before after edge tail left width bar row inner
+  local keyed='^ *(.*[^ ]) +\(([^()]+)\) *$' plain='^ *(.*[^ ]) *$'
+  while IFS= read -r line; do
+    lines+=("$line")
+  done < <(screen)
+  for i in "${!lines[@]}"; do
+    if [[ ${lines[i]} == *"$title"* ]]; then
+      top=$i
+      break
+    fi
+  done
+  ((top >= 0)) || return 1
+  before=${lines[top]%%"$title"*}
+  after=${lines[top]#*"$title"}
+  edge=${before%"${before##* }"}
+  tail=${after%% *}
+  left=${#edge}
+  width=$((${#before} - left + ${#title} + ${#tail}))
+  bar=${lines[top + 1]:left:1}
+  for ((i = top + 1; i < ${#lines[@]}; i++)); do
+    row=${lines[i]:left:width}
+    if [[ ${row:0:1} != "$bar" ]]; then
+      # A separator has more of the menu below it; the bottom border does not.
+      [[ ${lines[i + 1]:left:1} == [!\ ]* ]] || break
+      items+=('|')
+      continue
+    fi
+    inner=${row:1:width-2}
+    if [[ $inner =~ $keyed ]]; then
+      items+=("${BASH_REMATCH[1]}(${BASH_REMATCH[2]})")
+    elif [[ $inner =~ $plain ]]; then
+      items+=("${BASH_REMATCH[1]}")
+    else
+      items+=('<blank>')
+    fi
+  done
+  printf '%s' "${items[*]}"
+}
+
+menu_is() {
+  [[ $(menu_items) == "$1" ]]
+}
+
+# tmux draws a disabled item dim.
+menu_item_dim() {
+  "${HARNESS[@]}" capture-pane -p -e -t h | grep -qF -- $'\e[2m'"$1"
+}
+
+windows_are() {
+  [[ $(agent_windows "$1") == "$2" ]]
+}
+
+test_agent_menu_default_puts_shell_after_a_separator() {
+  start_host 'set -gu @greenroom-agents'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o) gemini(e) opencode(p) | shell(s)' || fail "menu: [$(menu_items)]" || return
+  press s
+  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)"
+}
+
+test_agent_menu_follows_the_list_order() {
+  start_host "set -g @greenroom-agents 'shell codex | claude'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'shell(s) codex(c) | claude(l)' || fail "menu: [$(menu_items)]" || return
+  press l
+  wait_for windows_are main 'claude claude ' || fail "windows: $(agent_windows main)"
+}
+
+test_agent_menu_without_shell() {
+  start_host "set -g @greenroom-agents 'claude codex'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o)' || fail "menu: [$(menu_items)]" || return
+  # If s still started a shell, the menu would be gone before o.
+  press s
+  press o
+  wait_for has_window main codex || fail "codex window not created after s: $(agent_windows main)" || return
+  windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+}
+
+test_agent_menu_drops_extra_separators() {
+  start_host "set -g @greenroom-agents '| |  claude | | codex  missing | |'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) | codex(o) missing(m)' || fail "menu: [$(menu_items)]"
+}
+
+test_agent_menu_drops_separators_left_by_skipped_names() {
+  start_host "set -g @greenroom-agents 'claude | bad.name | codex | claude'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) | codex(o)' || fail "menu: [$(menu_items)]"
+}
+
+test_agent_menu_custom_agent_runs_its_command() {
+  start_host "set -g @greenroom-agents 'claude my_cli-2 k9s'" \
+    "set -g @greenroom-my_cli-2-cmd '\"$WORK_DIR/stub-agent\" my-cli-run'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) my_cli-2(m) k9s(9)' || fail "menu: [$(menu_items)]" || return
+  press m
+  wait_for has_window main my_cli-2 || fail "my_cli-2 window not created: $(agent_windows main)" || return
+  wait_for screen_has "STUB my-cli-run in $ORIGIN" || fail "custom command not run in the origin"
+}
+
+test_agent_menu_custom_agent_without_cmd_runs_its_name() {
+  start_host "set -g @greenroom-agents 'claude tgr-plain'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) tgr-plain(t)' || fail "menu: [$(menu_items)]" || return
+  press t
+  wait_for screen_has 'tgr-plain exited with status 127' || fail "no exit status shown" || return
+  screen | grep -q 'tgr-plain: .*not found' || fail "the name was not run as the command"
+}
+
+test_agent_menu_shell_cmd_replaces_the_login_shell() {
+  start_host "set -g @greenroom-agents 'shell claude'" \
+    "set -g @greenroom-shell-cmd '\"$WORK_DIR/stub-agent\" my-shell'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'shell(s) claude(c)' || fail "menu: [$(menu_items)]" || return
+  press s
+  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)" || return
+  wait_for screen_has "STUB my-shell in $ORIGIN" || fail "shell command not used"
+}
+
+test_agent_menu_explicit_keys_are_shown_and_work() {
+  start_host "set -g @greenroom-agents 'claude codex missing'" \
+    'set -g @greenroom-claude-key M-a' \
+    'set -g @greenroom-codex-key X' \
+    'set -g @greenroom-missing-key 1'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(M-a) codex(X) missing(1)' || fail "menu: [$(menu_items)]" || return
+  press X
+  wait_for windows_are main 'claude codex ' || fail "X: windows: $(agent_windows main)" || return
+  open_agent_menu || return
+  press M-a
+  wait_for windows_are main 'claude codex claude ' || fail "M-a: windows: $(agent_windows main)" || return
+  open_agent_menu || return
+  press 1
+  wait_for has_window main missing || fail "1: windows: $(agent_windows main)"
+}
+
+test_agent_menu_explicit_key_may_be_a_menu_key() {
+  start_host "set -g @greenroom-agents 'claude codex'" 'set -g @greenroom-codex-key j'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(j)' || fail "menu: [$(menu_items)]" || return
+  press j
+  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+}
+
+test_agent_menu_explicit_arrow_keys_fall_back() {
+  start_host "set -g @greenroom-agents 'claude codex missing shell gemini opencode'" \
+    'set -g @greenroom-claude-key Up' \
+    'set -g @greenroom-codex-key Down' \
+    'set -g @greenroom-missing-key Left' \
+    'set -g @greenroom-shell-key Right' \
+    'set -g @greenroom-gemini-key S-Up' \
+    'set -g @greenroom-opencode-key down'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o) missing(m) shell(s) gemini(e) opencode(p)' || fail "menu: [$(menu_items)]" || return
+  press o
+  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+}
+
+test_agent_menu_second_claim_on_a_key_falls_back() {
+  start_host "set -g @greenroom-agents 'claude codex'" \
+    'set -g @greenroom-claude-key x' \
+    'set -g @greenroom-codex-key x'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(x) codex(c)' || fail "menu: [$(menu_items)]" || return
+  press c
+  wait_for windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+}
+
+test_agent_menu_automatic_key_skips_a_later_explicit_key() {
+  start_host "set -g @greenroom-agents 'claude codex'" 'set -g @greenroom-codex-key c'
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(l) codex(c)' || fail "menu: [$(menu_items)]" || return
+  press c
+  wait_for windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+}
+
+test_agent_menu_explicit_key_may_end_in_a_semicolon() {
+  start_host "set -g @greenroom-agents 'claude codex missing'" \
+    "set -g @greenroom-codex-key ';'" \
+    "set -g @greenroom-missing-key 'M-;'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(;) missing(M-;)' || fail "menu: [$(menu_items)]" || return
+  # A bare ';' argument would end send-keys.
+  press '\;'
+  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+}
+
+test_agent_menu_ignores_the_plugin_key_options() {
+  start_host "set -g @greenroom-agents 'claude root send send-pane agents workspaces'" \
+    'set -g @greenroom-root-key M-r' \
+    'set -g @greenroom-send-key x' \
+    'set -g @greenroom-send-pane-key X' \
+    'set -g @greenroom-agents-key C' \
+    'set -g @greenroom-workspaces-key W' \
+    "set -g @greenroom-root-cmd '\"$WORK_DIR/stub-agent\" root'"
+  open_popup || return
+  press C-a C
+  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for menu_is 'claude(c) root(r) send(s) send-pane(e) agents(a) workspaces(w)' ||
+    fail "menu: [$(menu_items)]" || return
+  press r
+  wait_for screen_has "STUB root in $ORIGIN" || fail "root command not run"
+}
+
+test_agent_menu_skips_invalid_names() {
+  # o.k would take o from codex if it were not skipped.
+  start_host "set -g @greenroom-agents 'claude o.k codex it#S'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o)' || fail "menu: [$(menu_items)]"
+}
+
+test_agent_menu_name_may_start_with_a_dash() {
+  # display-menu disables an item whose name starts with '-'.
+  start_host "set -g @greenroom-agents '-dash claude'" \
+    "set -g @greenroom--dash-cmd '\"$WORK_DIR/stub-agent\" dash'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is '-dash(d) claude(c)' || fail "menu: [$(menu_items)]" || return
+  press d
+  wait_for windows_are main 'claude -dash ' || fail "windows: $(agent_windows main)" || return
+  wait_for screen_has "STUB dash in $ORIGIN" || fail "dash command not run"
+}
+
+test_agent_menu_shows_a_duplicate_once() {
+  # A second claude would take l from cline.
+  start_host "set -g @greenroom-agents 'claude codex claude cline'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o) cline(l)' || fail "menu: [$(menu_items)]"
+}
+
+test_agent_menu_empty_list_shows_a_disabled_item() {
+  start_host "set -g @greenroom-agents ''"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'no agents configured' || fail "menu: [$(menu_items)]" || return
+  menu_item_dim 'no agents configured' || fail "item is not disabled" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close"
+}
+
+test_agent_menu_separator_only_list_shows_a_disabled_item() {
+  start_host "set -g @greenroom-agents '| |'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'no agents configured' || fail "menu: [$(menu_items)]" || return
+  menu_item_dim 'no agents configured' || fail "item is not disabled"
+}
+
+test_agent_menu_list_changes_apply_on_next_open() {
+  start_host "set -g @greenroom-agents 'claude codex'"
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) codex(o)' || fail "first menu: [$(menu_items)]" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -g @greenroom-agents 'codex | claude' \; set-option -g @greenroom-codex-key x
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'codex(x) | claude(c)' || fail "changed menu: [$(menu_items)]" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -gu @greenroom-codex-key
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'codex(c) | claude(l)' || fail "menu after removing the key: [$(menu_items)]"
+}
+
+test_default_agent_outside_the_list_still_starts() {
+  start_host "set -g @greenroom-agents 'codex'" \
+    'set -g @greenroom-default aider' \
+    "set -g @greenroom-aider-cmd '\"$WORK_DIR/stub-agent\" aider'"
+  open_popup || return
+  windows_are main 'aider ' || fail "windows: $(agent_windows main)" || return
+  wait_for screen_has "STUB aider in $ORIGIN" || fail "default agent did not run" || return
+  open_agent_menu || return
+  wait_for menu_is 'codex(c)' || fail "menu: [$(menu_items)]" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text 'two'
+  press Enter
+  wait_for popup_on two || fail "client not on two: $(agent_client_session)" || return
+  windows_are two 'aider ' || fail "new workspace windows: $(agent_windows two)"
 }
 
 # --- runner ------------------------------------------------------------------
