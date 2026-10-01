@@ -13,7 +13,7 @@ bind_key() {
 }
 
 main() {
-  local root_key send_key attach send binding
+  local root_key send_key open send binding
   # The agent server can be pointed at a config that loads this plugin again.
   if [[ -n $(get_tmux_option @greenroom_server '') ]]; then
     return
@@ -24,14 +24,15 @@ main() {
     tmux unbind-key -T "${binding%%:*}" "$(tmux_arg "${binding#*:}")"
   done
 
-  attach=$(quote "$SCRIPTS_DIR/attach.sh")
-  popup_args '#{pane_current_path}'
-  bind_key prefix "$(get_tmux_option @greenroom-key g)" "${POPUP[@]}" "$attach"
+  # display-popup expands neither -w, -h nor its command, so run-shell expands
+  # the client and the path, and open.sh builds the popup. See docs/design.md (D11).
+  open="$(format_escape "$(quote "$SCRIPTS_DIR/open.sh")") '#{client_name}' #{q:pane_current_path}"
+  bind_key prefix "$(get_tmux_option @greenroom-key g)" run-shell -b "$open"
   root_key=$(get_tmux_option @greenroom-root-key '')
   if [[ -n $root_key ]]; then
-    bind_key root "$root_key" "${POPUP[@]}" "$attach"
+    bind_key root "$root_key" run-shell -b "$open"
   fi
-  bind_key prefix "$(get_tmux_option @greenroom-workspaces-key G)" "${POPUP[@]}" "$attach --menu"
+  bind_key prefix "$(get_tmux_option @greenroom-workspaces-key G)" run-shell -b "$open --menu"
 
   # Both commands are format-expanded when they run.
   send=$(format_escape "$(quote "$SCRIPTS_DIR/send.sh")")

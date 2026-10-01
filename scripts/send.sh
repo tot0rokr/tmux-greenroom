@@ -20,9 +20,7 @@ main() {
     return 0
   fi
   printf '%s' "$text" | tmux load-buffer -b "$SEND_BUFFER" -
-
-  popup_args "$(tmux_arg "$(format_escape "$origin")")"
-  tmux display-popup -c "$client" "${POPUP[@]:1}" "$(quote "$SCRIPTS_DIR/attach.sh") --paste"
+  exec "$SCRIPTS_DIR/open.sh" "$client" "$origin" --paste
 }
 
 main "$@"

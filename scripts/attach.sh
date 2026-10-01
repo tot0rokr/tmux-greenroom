@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Runs as the popup job: the cwd is the origin pane path and $TMUX points at
 # the host server. Prepares the workspace, then becomes an agent server client.
+#
+#   attach.sh [--client <host client>] [--menu | --paste] [workspace]
+#   attach.sh --client <host client> --reopen <workspace>    from open.sh
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 
@@ -14,7 +17,7 @@ RESERVED_MENU_KEYS=' q j k g G '
 ARROW_KEY='^([CcMmSs]-|\^)*([Uu][Pp]|[Dd][Oo][Ww][Nn]|[Ll][Ee][Ff][Tt]|[Rr][Ii][Gg][Hh][Tt])$'
 # For these agent names, @greenroom-<name>-key is one of the plugin's own key
 # options, not a menu shortcut.
-PLUGIN_KEY_NAMES=' root send send-pane agents workspaces '
+PLUGIN_KEY_NAMES=' root send send-pane agents workspaces large grow shrink reset '
 # Hook array slots this plugin owns; conf/agent-server.conf uses 100.
 ALERT_HOOK_INDEX=101
 
@@ -23,6 +26,11 @@ KEY=$(get_tmux_option @greenroom-key g)
 ROOT_KEY=$(get_tmux_option @greenroom-root-key '')
 AGENTS_KEY=$(get_tmux_option @greenroom-agents-key c)
 WORKSPACES_KEY=$(get_tmux_option @greenroom-workspaces-key G)
+# An empty value binds no key, so prefix + z stays tmux's zoom.
+LARGE_KEY=$(tmux show-option -gv @greenroom-large-key 2>/dev/null) || LARGE_KEY=z
+GROW_KEY=$(get_tmux_option @greenroom-grow-key '')
+SHRINK_KEY=$(get_tmux_option @greenroom-shrink-key '')
+RESET_KEY=$(get_tmux_option @greenroom-reset-key '')
 # An empty list is kept: it means no agents, not the default.
 AGENTS=$(tmux show-option -gv @greenroom-agents 2>/dev/null) ||
   AGENTS='claude codex gemini opencode | shell'
@@ -190,7 +198,7 @@ agent_menu() {
 push_bindings() {
   local prefix prefix2 binding
   for binding in $(agent_tmux show-option -gqv @greenroom_bound 2>/dev/null); do
-    chain unbind-key -T "${binding%%:*}" "${binding#*:}"
+    release_key "$binding"
   done
 
   prefix=$(tmux show-option -gqv prefix)
@@ -204,7 +212,48 @@ push_bindings() {
     "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'"
   agent_menu
   chain_bind prefix "$AGENTS_KEY" "${AGENT_MENU[@]}"
+  bind_size_key "$LARGE_KEY" large
+  bind_size_key "$GROW_KEY" grow
+  bind_size_key "$SHRINK_KEY" shrink
+  bind_size_key "$RESET_KEY" reset
   chain set-option -g @greenroom_bound "$BOUND"
+}
+
+# Drops a binding of the last open; a new one for the key comes later in CHAIN.
+# tmux has no command that restores one default binding, and on a new agent
+# server the binding a key had before the plugin took it cannot be read. So the
+# tmux keys the plugin takes by default (c, z) or the README suggests (-, =)
+# get their tmux binding back, and other keys stay unbound until a restart.
+release_key() {
+  case $1 in
+    prefix:c) chain bind-key -T prefix c new-window ;;
+    prefix:z) chain bind-key -T prefix z resize-pane -Z ;;
+    prefix:-) chain bind-key -T prefix - delete-buffer ;;
+    prefix:=) chain bind-key -T prefix = choose-buffer -Z ;;
+    *) chain unbind-key -T "${1%%:*}" "${1#*:}" ;;
+  esac
+}
+
+# Popup size keys; see docs/design.md (D11). An empty key is not bound.
+bind_size_key() {
+  [[ -n $1 ]] || return 0
+  chain_bind prefix "$1" run-shell -b \
+    "$(format_escape "$(quote "$SCRIPTS_DIR/size.sh")") $2 '#{client_pid}' #{q:session_name}"
+}
+
+# size.sh finds the host client of a popup by the pid of its inner client,
+# which this process becomes with the exec at the end. Entries of clients that
+# have gone are dropped.
+record_host_client() {
+  local client=$1 pids name
+  pids=" $(agent_tmux list-clients -F '#{client_pid}' 2>/dev/null | tr '\n' ' ')"
+  for name in $(agent_tmux show-options -g 2>/dev/null | awk '$1 ~ /^@greenroom_host_client_/ { print $1 }'); do
+    case $pids in
+      *" ${name#@greenroom_host_client_} "*) ;;
+      *) chain set-option -gu "$name" ;;
+    esac
+  done
+  [[ -n $client ]] && chain set-option -g "@greenroom_host_client_$$" "$client"
 }
 
 # Bells reach the host through alert.sh; see docs/design.md (D9).
@@ -234,14 +283,29 @@ paste_after_attach() {
 }
 
 main() {
-  local open_menu='' paste='' fresh='' created='' workspace origin=$PWD
+  local open_menu='' paste='' reopen='' fresh='' created='' host_client='' workspace origin=$PWD
   while [[ ${1:-} == --* ]]; do
     case $1 in
+      --client)
+        host_client=$2
+        shift
+        ;;
       --menu) open_menu=1 ;;
       --paste) paste=1 ;;
+      --reopen) reopen=1 ;;
     esac
     shift
   done
+
+  # size.sh re-opens the popup on a workspace that is ready. Preparing it
+  # again would leave the new popup empty for about half a second. Entries of
+  # gone clients stay until the next open, since a size key that the old
+  # client sent last still looks up its own.
+  if [[ -n $reopen ]]; then
+    chain set-option -g "@greenroom_host_client_$$" "$host_client"
+    chain attach-session -t "=$1"
+    exec env -u TMUX -u TMUX_PANE tmux -L "$SOCKET" "${CHAIN[@]}"
+  fi
 
   agent_tmux list-sessions >/dev/null 2>&1 || fresh=1
   workspace=$(pick_workspace "${1:-}")
@@ -254,6 +318,7 @@ main() {
   push_state
   push_bindings
   push_alert_hooks
+  record_host_client "$host_client"
   if [[ -n $fresh ]] || ! has_workspace "$workspace"; then
     created=1
     chain new-session -d -s "$workspace" -c "$(format_escape "$origin")" -n "$DEFAULT_AGENT" \

@@ -82,8 +82,13 @@ EOF
 
 # start_host [extra host.conf lines...]
 start_host() {
-  local line
   stop_servers
+  launch_host "$@"
+}
+
+# Starts the harness and the host server, and leaves the agent server alone.
+launch_host() {
+  local line
   {
     printf '%s\n' \
       'set -g prefix C-a' \
@@ -842,6 +847,729 @@ test_default_agent_outside_the_list_still_starts() {
   press Enter
   wait_for popup_on two || fail "client not on two: $(agent_client_session)" || return
   windows_are two 'aider ' || fail "new workspace windows: $(agent_windows two)"
+}
+
+# --- popup size --------------------------------------------------------------
+
+host_state() {
+  "${HOST[@]}" show-option -gqv "@greenroom_size_$1"
+}
+
+# The sizes of the inner clients, sorted, each followed by a space.
+inner_sizes() {
+  "${AGENT[@]}" list-clients -F '#{client_width}x#{client_height}' 2>/dev/null | LC_ALL=C sort | tr '\n' ' '
+}
+
+# inner_is <size>...: the agent server has exactly these inner clients.
+inner_is() {
+  [[ $(inner_sizes) == "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ]]
+}
+
+inner_pids() {
+  "${AGENT[@]}" list-clients -F '#{client_pid}' 2>/dev/null
+}
+
+process_gone() {
+  ! kill -0 "$1" 2>/dev/null
+}
+
+# popup_inner <client width> <client height> <width> <height>
+# The terminal size of a popup job. A percent is of the whole host client,
+# and the border takes a cell on each side.
+popup_inner() {
+  local w=$3 h=$4
+  [[ $w == *% ]] && w=$(($1 * ${w%\%} / 100))
+  [[ $h == *% ]] && h=$(($2 * ${h%\%} / 100))
+  printf '%dx%d' $((w - 2)) $((h - 2))
+}
+
+# The host client running in a harness session (default h).
+host_client() {
+  "${HARNESS[@]}" display-message -p -t "${1:-h}" '#{pane_tty}'
+}
+
+host_client_size() {
+  "${HOST[@]}" list-clients -F '#{client_name} #{client_width} #{client_height}' |
+    awk -v name="$1" '$1 == name { print $2, $3 }'
+}
+
+# inner_for <width> <height> [harness session]
+inner_for() {
+  local size
+  size=$(host_client_size "$(host_client "${3:-h}")")
+  popup_inner "${size% *}" "${size#* }" "$1" "$2"
+}
+
+agent_panes() {
+  "${AGENT[@]}" list-panes -s -t "=$1" -F '#{pane_id}' 2>/dev/null | tr '\n' ' '
+}
+
+workspace_origin() {
+  "${AGENT[@]}" show-option -qv -t "=$1:" @greenroom_origin | unescape_output
+}
+
+agent_bound() {
+  "${AGENT[@]}" show-option -gqv @greenroom_bound
+}
+
+# key_binding <table> <key> <tmux command...>: the list-keys line of the key.
+key_binding() {
+  local table=$1 key=$2
+  shift 2
+  "$@" list-keys -T "$table" 2>/dev/null | awk -v key="$key" '
+    { for (i = 1; i < NF; i++) if ($i == "-T") { if ($(i + 2) == key) print; break } }'
+}
+
+# The plugin script that a key runs.
+bound_script() {
+  local line rest
+  line=$(key_binding "$@")
+  rest=${line#*"$REPO_DIR/scripts/"}
+  [[ $rest != "$line" ]] || return 1
+  printf '%s' "$REPO_DIR/scripts/${rest%%.sh*}.sh"
+}
+
+# keys_running <text> <tmux command...>: "table:key" of every binding whose
+# command contains the text, sorted.
+keys_running() {
+  local text=$1
+  shift
+  "$@" list-keys 2>/dev/null | awk -v text="$text" '
+    index($0, text) { for (i = 1; i < NF; i++) if ($i == "-T") { print $(i + 1) ":" $(i + 2); break } }' |
+    LC_ALL=C sort | tr '\n' ' '
+}
+
+# Processes the agent server runs besides its panes: key and hook jobs.
+agent_jobs() {
+  local server panes pid ppid args
+  server=$("${AGENT[@]}" display-message -p '#{pid}') || return 0
+  panes=" $("${AGENT[@]}" list-panes -a -F '#{pane_pid}' | tr '\n' ' ') "
+  while read -r pid ppid args; do
+    [[ $ppid == "$server" && $panes != *" $pid "* ]] && printf '%s\n' "$args"
+  done < <(ps -A -o pid= -o ppid= -o args=)
+}
+
+no_agent_jobs() {
+  [[ -z $(agent_jobs) ]]
+}
+
+# A run-shell job that fails prints "'...' returned N" in a pane in view mode.
+pane_modes() {
+  "${HOST[@]}" list-panes -a -F 'host #{pane_id} #{pane_in_mode} #{pane_mode}' 2>/dev/null
+  "${AGENT[@]}" list-panes -a -F 'agent #{pane_id} #{pane_in_mode} #{pane_mode}' 2>/dev/null
+}
+
+no_pane_in_mode() {
+  ! pane_modes | awk '$3 == 1 { found = 1 } END { exit !found }'
+}
+
+# Fills a host pane with x and keeps it so: the host screen around a popup can
+# be told from the popup, and keys that reach the pane show up in it.
+fill_host_pane() {
+  local width
+  width=$("${HOST[@]}" display-message -p -t "$1" '#{pane_width}')
+  "${HOST[@]}" send-keys -t "$1" -l \
+    "i=0; while [ \$i -lt 60 ]; do printf '%0${width}d' 0; i=\$((i + 1)); done | tr 0 x; sleep 600" \; \
+    send-keys -t "$1" Enter
+  wait_for host_pane_filled "$1"
+}
+
+host_pane_filled() {
+  ! "${HOST[@]}" capture-pane -p -t "$1" | grep -qvx 'xx*'
+}
+
+host_row() {
+  [[ $1 == x* && $1 != *[!x]* ]]
+}
+
+# popup_framed <harness session> <inner client height>
+# Succeeds if the popup has its border on every side and the host screen,
+# filled by fill_host_pane, shows around it. The last row is the host status
+# line.
+popup_framed() {
+  local lines=() line i top=-1 bottom last
+  while IFS= read -r line; do
+    lines+=("$line")
+  done < <("${HARNESS[@]}" capture-pane -p -t "$1")
+  for i in "${!lines[@]}"; do
+    if [[ ${lines[i]} == *' agents '* ]]; then
+      top=$i
+      break
+    fi
+  done
+  bottom=$((top + $2 + 1))
+  last=$((${#lines[@]} - 1))
+  ((top >= 1 && bottom < last)) || return 1
+  host_row "${lines[top - 1]}" || return 1
+  ((bottom + 1 == last)) || host_row "${lines[bottom + 1]}" || return 1
+  for ((i = top; i <= bottom; i++)); do
+    [[ ${lines[i]} == x*[!x]*x ]] || return 1
+  done
+}
+
+# size_key <key> <width> <height>: presses a size key inside the popup, and
+# waits for the popup to come back at that normal size.
+size_key() {
+  local expected
+  expected=$(inner_for "$2" "$3")
+  press C-a "$1"
+  wait_for inner_is "$expected" ||
+    fail "after $1: inner clients $(inner_sizes), expected $expected ($2 x $3)" || return
+  [[ $(host_state width) == "$2" && $(host_state height) == "$3" ]] ||
+    fail "after $1: size state [$(host_state width)] x [$(host_state height)], expected $2 x $3" || return
+  [[ $(host_state large) != 1 ]] || fail "after $1: still large"
+}
+
+# size_key_is_a_no_op <key> <width> <height>: the size is at a limit already.
+size_key_is_a_no_op() {
+  local expected
+  expected=$(inner_for "$2" "$3")
+  press C-a "$1"
+  # Time for the action to run; a re-open at the same size is allowed.
+  sleep 0.5
+  wait_for inner_is "$expected" || fail "after $1 at the limit: inner clients $(inner_sizes), expected $expected" || return
+  [[ $(host_state width) == "$2" && $(host_state height) == "$3" ]] ||
+    fail "after $1 at the limit: size state [$(host_state width)] x [$(host_state height)], expected $2 x $3"
+}
+
+host_client_records() {
+  "${AGENT[@]}" show-options -g 2>/dev/null | awk '$1 ~ /^@greenroom_host_client_/' | LC_ALL=C sort
+}
+
+most_active_host_client() {
+  "${HOST[@]}" list-clients -F '#{client_activity} #{client_name}' | sort -n | tail -n 1 | cut -d ' ' -f 2
+}
+
+host_pane_path_is() {
+  [[ $("${HOST[@]}" display-message -p -t "$1" '#{pane_current_path}') == "$2" ]]
+}
+
+host_server_gone() {
+  ! "${HOST[@]}" list-sessions >/dev/null 2>&1
+}
+
+host_clients_are() {
+  [[ $("${HOST[@]}" list-clients -F x 2>/dev/null | grep -c x) == "$1" ]]
+}
+
+# A second host client, 120x41, in harness session h2 on host session host2.
+start_second_client() {
+  "${HARNESS[@]}" new-session -d -s h2 -x 120 -y 41 \; \
+    respawn-pane -k -t h2 \
+    "env -u TMUX SHELL=/bin/sh tmux -L '$ID-host' new-session -s host2 -c $(sh_quote "$1")"
+  wait_for host_clients_are 2
+}
+
+screen_of_has() {
+  "${HARNESS[@]}" capture-pane -p -t "$1" | grep -qF -- "$2"
+}
+
+test_size_large_key_toggles_a_large_popup() {
+  local normal large panes pid size
+  start_host
+  fill_host_pane host: || fail "host pane not filled" || return
+  normal=$(inner_for 80% 80%)
+  large=$(inner_for 95% 95%)
+  ! popup_framed h "${large#*x}" || fail "found a popup frame with no popup" || return
+  open_popup || return
+  "${AGENT[@]}" new-window -t =main: -n second 'sleep 600'
+  wait_for inner_is "$normal" || fail "normal popup: inner clients $(inner_sizes), expected $normal" || return
+  wait_for popup_framed h "${normal#*x}" || fail "normal popup frame not found" || return
+  is_bound prefix z "${AGENT[@]}" || fail "agent server does not bind z" || return
+  [[ " $(agent_bound) " == *' prefix:z '* ]] || fail "z not in @greenroom_bound: $(agent_bound)" || return
+  panes=$(agent_panes main)
+  pid=$(inner_pids)
+
+  press C-a z
+  wait_for inner_is "$large" || fail "large popup: inner clients $(inner_sizes), expected $large" || return
+  [[ $(host_state large) == 1 ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
+  popup_on main || fail "popup on [$(agent_client_session)]" || return
+  [[ $(agent_panes main) == "$panes" ]] || fail "panes: $(agent_panes main), were $panes" || return
+  [[ $(pane_field main '' '#{window_name}') == second ]] ||
+    fail "current agent: $(pane_field main '' '#{window_name}')" || return
+  wait_for process_gone "$pid" || fail "old inner client $pid still runs" || return
+  size=$(host_client_size "$(host_client)")
+  ((${large%x*} + 2 < ${size% *} && ${large#*x} + 2 < ${size#* })) ||
+    fail "large popup $large is not smaller than the host client $size" || return
+  wait_for popup_framed h "${large#*x}" || fail "large popup has no border or no margin" || return
+  wait_for no_agent_jobs || fail "jobs left in the agent server: $(agent_jobs)" || return
+  type_text 'typed-in-large'
+  wait_for agent_pane_has main 'typed-in-large' || fail "keys did not reach the agent" || return
+  host_pane_filled host: || fail "keys reached the host pane" || return
+
+  press C-a z
+  wait_for inner_is "$normal" || fail "after toggling back: inner clients $(inner_sizes), expected $normal" || return
+  [[ $(host_state large) != 1 ]] || fail "still large" || return
+  [[ $(agent_panes main) == "$panes" ]] || fail "panes after toggling back: $(agent_panes main), were $panes" || return
+  # A late popup, a second inner client or a failed job shows up by now.
+  sleep 0.5
+  inner_is "$normal" || fail "inner clients a moment later: $(inner_sizes)" || return
+  no_pane_in_mode || fail "a job reported an error: $(pane_modes | tr '\n' ',')"
+}
+
+host_size_is() {
+  [[ $(host_client_size "$(host_client)") == "$1" ]]
+}
+
+# tmux's own centring put a 95% popup on the top edge at these heights, where
+# the popup is 47 and 38 rows high.
+test_size_large_popup_keeps_its_margin_at_other_heights() {
+  local rows large
+  start_host
+  fill_host_pane host: || fail "host pane not filled" || return
+  open_popup || return
+  press C-a z
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  for rows in 50 40; do
+    "${HARNESS[@]}" resize-window -t h -y "$rows"
+    wait_for host_size_is "160 $rows" || fail "host client is $(host_client_size "$(host_client)")" || return
+    wait_for host_pane_filled host: || fail "host pane at $rows rows not filled" || return
+    open_popup || return
+    large=$(inner_for 95% 95%)
+    wait_for inner_is "$large" || fail "at $rows rows: inner clients $(inner_sizes), expected $large" || return
+    wait_for popup_framed h "${large#*x}" || fail "at $rows rows: the popup has no border or no margin" || return
+    press C-a g
+    wait_for popup_closed || fail "popup still open" || return
+  done
+}
+
+test_size_large_uses_the_large_size_options() {
+  local normal large
+  start_host 'set -g @greenroom-large-width 90%' 'set -g @greenroom-large-height 85%'
+  normal=$(inner_for 80% 80%)
+  large=$(inner_for 90% 85%)
+  open_popup || return
+  wait_for inner_is "$normal" || fail "normal popup: $(inner_sizes)" || return
+  press C-a z
+  wait_for inner_is "$large" || fail "large popup: inner clients $(inner_sizes), expected $large" || return
+  press C-a z
+  wait_for inner_is "$normal" || fail "after toggling back: $(inner_sizes)"
+}
+
+test_size_grow_steps_and_clamps_each_dimension_at_95() {
+  start_host 'set -g @greenroom-width 70%' 'set -g @greenroom-height 60%' \
+    'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -'
+  open_popup || return
+  wait_for inner_is "$(inner_for 70% 60%)" || fail "first popup: $(inner_sizes)" || return
+  size_key + 80% 70% || return
+  size_key + 90% 80% || return
+  size_key + 95% 90% || return
+  size_key + 95% 95% || return
+  size_key_is_a_no_op + 95% 95% || return
+  # From the stored 95%, not from an unclamped 105%.
+  size_key - 85% 85%
+}
+
+test_size_shrink_steps_and_clamps_each_dimension_at_20() {
+  start_host 'set -g @greenroom-width 50%' 'set -g @greenroom-height 40%' \
+    'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -'
+  open_popup || return
+  wait_for inner_is "$(inner_for 50% 40%)" || fail "first popup: $(inner_sizes)" || return
+  size_key - 40% 30% || return
+  size_key - 30% 20% || return
+  size_key - 20% 20% || return
+  size_key_is_a_no_op - 20% 20% || return
+  # From the stored 20%, not from an unclamped 10%.
+  size_key + 30% 30%
+}
+
+test_size_reset_returns_to_the_size_options() {
+  local normal
+  start_host 'set -g @greenroom-width 70%' 'set -g @greenroom-height 60%' \
+    'set -g @greenroom-grow-key +' 'set -g @greenroom-reset-key ='
+  normal=$(inner_for 70% 60%)
+  open_popup || return
+  wait_for inner_is "$normal" || fail "first popup: $(inner_sizes)" || return
+  size_key + 80% 70% || return
+  press C-a z
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
+  press C-a =
+  wait_for inner_is "$normal" || fail "after reset: inner clients $(inner_sizes), expected $normal" || return
+  [[ -z "$(host_state width)$(host_state height)$(host_state large)" ]] ||
+    fail "state left after reset: [$(host_state width)] [$(host_state height)] [$(host_state large)]" || return
+  # The grown size is gone: leaving large mode goes back to the options too.
+  press C-a z
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup after reset: $(inner_sizes)" || return
+  press C-a z
+  wait_for inner_is "$normal" || fail "large off after reset: inner clients $(inner_sizes), expected $normal"
+}
+
+test_size_step_option_sets_the_step() {
+  start_host 'set -g @greenroom-resize-step 5' \
+    'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -'
+  open_popup || return
+  wait_for inner_is "$(inner_for 80% 80%)" || fail "first popup: $(inner_sizes)" || return
+  size_key + 85% 85% || return
+  size_key - 80% 80% || return
+  size_key - 75% 75%
+}
+
+test_size_cells_convert_to_percent() {
+  start_host 'set -g @greenroom-width 120' 'set -g @greenroom-height 18' \
+    'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
+  # 120 of 160 columns is 75%, and 18 of 45 rows is 40%.
+  [[ $(host_client_size "$(host_client)") == '160 45' ]] ||
+    fail "test setup: host client is $(host_client_size "$(host_client)")" || return
+  open_popup || return
+  wait_for inner_is 118x16 || fail "first popup: $(inner_sizes)" || return
+  size_key + 85% 50% || return
+  press C-a =
+  wait_for inner_is 118x16 || fail "after reset: $(inner_sizes)" || return
+  size_key - 65% 30%
+}
+
+test_size_cells_convert_with_the_popup_client_size() {
+  local b_dir="$WORK_DIR/client-b" a expected
+  mkdir -p "$b_dir"
+  start_host 'set -g @greenroom-width 60' 'set -g @greenroom-height 20' 'set -g @greenroom-grow-key +'
+  start_second_client "$b_dir" || fail "second host client did not start" || return
+  a=$(host_client h)
+  "${HARNESS[@]}" send-keys -t h2 C-a g
+  wait_for inner_is 58x18 || fail "second client popup: $(inner_sizes)" || return
+  # The first client becomes the most recently active one, the client whose
+  # size a lookup that ignores the popup's client would take.
+  sleep 1.1
+  type_text 'echo FIRST-CLIENT-ACTIVE'
+  press Enter
+  wait_for screen_has 'FIRST-CLIENT-ACTIVE' || fail "first client did not take the keys" || return
+  [[ $(most_active_host_client) == "$a" ]] ||
+    fail "test setup: most active host client is $(most_active_host_client), not $a" || return
+  # 60 of 120 columns is 50%, and 20 of 41 rows is 49%.
+  expected=$(inner_for 60% 59% h2)
+  "${HARNESS[@]}" send-keys -t h2 C-a +
+  wait_for inner_is "$expected" ||
+    fail "after grow on the second client: inner clients $(inner_sizes), expected $expected" || return
+  [[ $(host_state width) == 60% && $(host_state height) == 59% ]] ||
+    fail "size state [$(host_state width)] x [$(host_state height)], expected 60% x 59%"
+}
+
+test_size_grow_and_shrink_leave_large_mode() {
+  local large
+  start_host 'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -'
+  large=$(inner_for 95% 95%)
+  open_popup || return
+  press C-a z
+  wait_for inner_is "$large" || fail "large popup: $(inner_sizes)" || return
+  size_key + 90% 90% || return
+  press C-a z
+  wait_for inner_is "$large" || fail "large popup again: $(inner_sizes)" || return
+  [[ $(host_state large) == 1 ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
+  # Shrinks the normal size, 90%, and leaves large mode.
+  size_key - 80% 80%
+}
+
+test_size_only_the_large_key_is_bound_by_default() {
+  local script
+  start_host
+  open_popup || return
+  script=$(bound_script prefix z "${AGENT[@]}") ||
+    fail "z does not run a plugin script: [$(key_binding prefix z "${AGENT[@]}")]" || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")"
+}
+
+test_size_empty_large_key_keeps_the_zoom_key() {
+  local script
+  start_host "set -g @greenroom-large-key ''" 'set -g @greenroom-grow-key +'
+  open_popup || return
+  script=$(bound_script prefix + "${AGENT[@]}") ||
+    fail "+ does not run a plugin script: [$(key_binding prefix + "${AGENT[@]}")]" || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:+ ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")" || return
+  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] ||
+    fail "prefix z: [$(key_binding prefix z "${AGENT[@]}")]"
+}
+
+test_size_key_options_bind_and_unbind_on_next_open() {
+  local script key
+  start_host 'set -g @greenroom-large-key Z' 'set -g @greenroom-grow-key +' \
+    'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
+  open_popup || return
+  script=$(bound_script prefix Z "${AGENT[@]}") ||
+    fail "Z does not run a plugin script: [$(key_binding prefix Z "${AGENT[@]}")]" || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:+ prefix:- prefix:= prefix:Z ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")" || return
+  for key in + - = Z; do
+    [[ " $(agent_bound) " == *" prefix:$key "* ]] || fail "$key not in @greenroom_bound: $(agent_bound)" || return
+  done
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -gu @greenroom-large-key \; set-option -gu @greenroom-grow-key \; \
+    set-option -gu @greenroom-shrink-key \; set-option -gu @greenroom-reset-key
+  open_popup || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script after unsetting: $(keys_running "$script" "${AGENT[@]}")" || return
+  ! is_bound prefix + "${AGENT[@]}" || fail "+ is still bound"
+}
+
+window_zoomed() {
+  [[ $("${AGENT[@]}" display-message -p -t "=$1:" '#{window_zoomed_flag}') == 1 ]]
+}
+
+# On a running agent server, which keeps the bindings of the last open.
+test_size_freed_keys_get_their_tmux_binding_back() {
+  local script
+  start_host 'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
+  open_popup || return
+  script=$(bound_script prefix z "${AGENT[@]}") ||
+    fail "z does not run a plugin script: [$(key_binding prefix z "${AGENT[@]}")]" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -g @greenroom-large-key '' \; set-option -g @greenroom-agents-key C \; \
+    set-option -gu @greenroom-grow-key \; set-option -gu @greenroom-shrink-key \; set-option -gu @greenroom-reset-key
+  open_popup || return
+  [[ -z $(keys_running "$script" "${AGENT[@]}") ]] ||
+    fail "keys that still run $script: $(keys_running "$script" "${AGENT[@]}")" || return
+  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] || fail "prefix z: [$(key_binding prefix z "${AGENT[@]}")]" || return
+  [[ $(key_binding prefix c "${AGENT[@]}") == *'new-window'* ]] || fail "prefix c: [$(key_binding prefix c "${AGENT[@]}")]" || return
+  [[ $(key_binding prefix - "${AGENT[@]}") == *'delete-buffer'* ]] || fail "prefix -: [$(key_binding prefix - "${AGENT[@]}")]" || return
+  [[ $(key_binding prefix = "${AGENT[@]}") == *'choose-buffer -Z'* ]] || fail "prefix =: [$(key_binding prefix = "${AGENT[@]}")]" || return
+  ! is_bound prefix + "${AGENT[@]}" || fail "+ is still bound" || return
+  [[ " $(agent_bound) " != *' prefix:z '* ]] || fail "z still in @greenroom_bound: $(agent_bound)" || return
+  "${AGENT[@]}" split-window -d -t =main: 'sleep 600'
+  press C-a z
+  wait_for window_zoomed main || fail "prefix z did not zoom the pane" || return
+
+  # Moving the large key to another key gives z back too.
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -gu @greenroom-large-key \; set-option -gu @greenroom-agents-key
+  open_popup || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script with the default: $(keys_running "$script" "${AGENT[@]}")" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -g @greenroom-large-key Z
+  open_popup || return
+  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:Z ' ]] ||
+    fail "keys that run $script with Z: $(keys_running "$script" "${AGENT[@]}")" || return
+  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] ||
+    fail "prefix z after moving the large key: [$(key_binding prefix z "${AGENT[@]}")]"
+}
+
+test_size_agent_menu_ignores_the_size_key_options() {
+  start_host "set -g @greenroom-agents 'claude large grow shrink reset'" \
+    'set -g @greenroom-large-key Z' 'set -g @greenroom-grow-key +' \
+    'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
+  open_popup || return
+  open_agent_menu || return
+  wait_for menu_is 'claude(c) large(l) grow(r) shrink(s) reset(e)' || fail "menu: [$(menu_items)]" || return
+  press q
+  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  size_key + 90% 90%
+}
+
+test_size_persists_across_close_and_reopen() {
+  local grown large
+  start_host 'set -g @greenroom-grow-key +' 'set -g @greenroom-root-key M-g'
+  grown=$(inner_for 90% 90%)
+  large=$(inner_for 95% 95%)
+  open_popup || return
+  size_key + 90% 90% || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  [[ $(host_state width) == 90% ]] || fail "size state after closing: [$(host_state width)]" || return
+  open_popup || return
+  wait_for inner_is "$grown" || fail "prefix+g opened at $(inner_sizes), expected $grown" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  inner_is "$grown" || fail "prefix+G opened at $(inner_sizes), expected $grown" || return
+  press q
+  wait_for menu_closed 'New workspace' || fail "workspace menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  press M-g
+  wait_for inner_is "$grown" || fail "root key opened at $(inner_sizes), expected $grown" || return
+  press M-g
+  wait_for popup_closed || fail "popup still open" || return
+
+  open_popup || return
+  press C-a z
+  wait_for inner_is "$large" || fail "large popup: $(inner_sizes)" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  open_popup || return
+  wait_for inner_is "$large" || fail "large mode lost on close: $(inner_sizes)" || return
+  press C-a z
+  wait_for inner_is "$grown" || fail "large off: inner clients $(inner_sizes), expected the grown $grown"
+}
+
+test_size_resets_when_the_host_server_restarts() {
+  local pane
+  start_host 'set -g @greenroom-grow-key +'
+  open_popup || return
+  pane=$(pane_field main claude '#{pane_id}')
+  size_key + 90% 90% || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HARNESS[@]}" kill-server
+  "${HOST[@]}" kill-server 2>/dev/null
+  wait_for host_server_gone || fail "host server still running" || return
+  launch_host 'set -g @greenroom-grow-key +'
+  open_popup || return
+  [[ $(pane_field main claude '#{pane_id}') == "$pane" ]] || fail "agent pane changed across the host restart" || return
+  wait_for inner_is "$(inner_for 80% 80%)" || fail "opened at $(inner_sizes) after a host restart"
+}
+
+test_size_send_opens_at_the_grown_size() {
+  local grown
+  start_host 'set -g @greenroom-grow-key +'
+  grown=$(inner_for 90% 90%)
+  open_popup || return
+  size_key + 90% 90% || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  type_text 'echo SIZE-SEND-7'
+  press Enter
+  wait_for screen_has 'SIZE-SEND-7' || fail "host pane output not shown" || return
+  press C-a S
+  wait_for popup_on main || fail "popup did not open" || return
+  wait_for inner_is "$grown" || fail "send opened at $(inner_sizes), expected $grown" || return
+  wait_for agent_pane_has main 'SIZE-SEND-7' || fail "screen did not reach the agent" || return
+  [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
+}
+
+test_size_reopen_keeps_the_workspace_and_its_origin() {
+  local elsewhere="$WORK_DIR/elsewhere" two="$WORK_DIR/two #{pane_id} it's \$y;" panes client
+  mkdir -p "$elsewhere" "$two"
+  start_host
+  open_popup || return
+  # The host pane changes directory while the popup is open.
+  "${HOST[@]}" send-keys -t host: -l "cd $(sh_quote "$elsewhere")" \; send-keys -t host: Enter
+  wait_for host_pane_path_is host: "$elsewhere" || fail "host pane did not change directory" || return
+  press C-a z
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
+  [[ $(workspace_origin main) == "$ORIGIN" ]] || fail "main origin after large: $(workspace_origin main)" || return
+
+  # A workspace with an origin of its own, as if opened from another pane.
+  "${AGENT[@]}" new-session -d -s two -n claude 'sleep 600' \; \
+    set-option -t =two: @greenroom_origin "${two%;}\\;"
+  [[ $(workspace_origin two) == "$two" ]] || fail "test setup: origin of two: $(workspace_origin two)" || return
+  panes=$(agent_panes two)
+  client=$("${AGENT[@]}" list-clients -F '#{client_name}')
+  "${AGENT[@]}" switch-client -c "$client" -t =two
+  wait_for popup_on two || fail "client not on two: $(agent_client_session)" || return
+  # As if another host client had opened main since.
+  "${AGENT[@]}" set-option -g @greenroom_last main
+  press C-a z
+  wait_for inner_is "$(inner_for 80% 80%)" || fail "after large off: $(inner_sizes)" || return
+  popup_on two || fail "re-opened on [$(agent_client_session)]" || return
+  [[ $(agent_panes two) == "$panes" ]] || fail "panes of two: $(agent_panes two), were $panes" || return
+  [[ $(workspace_origin two) == "$two" ]] || fail "origin of two: $(workspace_origin two)" || return
+  [[ $(workspace_origin main) == "$ORIGIN" ]] || fail "origin of main: $(workspace_origin main)" || return
+  open_agent_menu || return
+  press o
+  wait_for has_window two codex || fail "codex window not created: $(agent_windows two)" || return
+  [[ $(pane_field two codex '#{pane_current_path}') == "$two" ]] ||
+    fail "codex cwd: $(pane_field two codex '#{pane_current_path}')"
+}
+
+test_size_inner_client_records_its_host_client() {
+  local host pid
+  start_host
+  open_popup || return
+  host=$(host_client)
+  pid=$(inner_pids)
+  [[ $(host_client_records) == "@greenroom_host_client_$pid $host" ]] ||
+    fail "records: [$(host_client_records)], inner client $pid on $host" || return
+  press C-a z
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
+  pid=$(inner_pids)
+  host_client_records | grep -qxF "@greenroom_host_client_$pid $host" ||
+    fail "no record for the new inner client $pid: [$(host_client_records)]" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  open_popup || return
+  pid=$(inner_pids)
+  # Records of inner clients that have gone are dropped on the next open.
+  [[ $(host_client_records) == "@greenroom_host_client_$pid $host" ]] ||
+    fail "records after reopening: [$(host_client_records)], inner client $pid"
+}
+
+# The size keys are bound for every client of the agent server. One attached
+# directly has no host client record, and the host client must not get a popup.
+test_size_key_in_a_direct_client_does_nothing() {
+  start_host
+  open_popup || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HARNESS[@]}" new-session -d -s h2 -x 100 -y 30 \; \
+    respawn-pane -k -t h2 "env -u TMUX tmux -L '$ID-agent' attach-session -t =main"
+  wait_for inner_is 100x30 || fail "direct client: inner clients $(inner_sizes)" || return
+  "${HARNESS[@]}" send-keys -t h2 C-a z
+  # Time for the action to run.
+  sleep 0.5
+  inner_is 100x30 || fail "inner clients after the size key: $(inner_sizes)" || return
+  [[ -z $(host_state large) ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
+  ! screen_has ' agents ' || fail "a popup opened on the host client" || return
+  no_pane_in_mode || fail "a job reported an error: $(pane_modes | tr '\n' ',')"
+}
+
+test_size_keys_typed_during_a_reopen_stay_in_the_popup() {
+  local i=0
+  start_host
+  fill_host_pane host: || fail "host pane not filled" || return
+  open_popup || return
+  press C-a z
+  # Keys spread over the re-open. Between two separate display-popup calls,
+  # some reach the host pane.
+  while ((i < 30)); do
+    press Q
+    sleep 0.01
+    i=$((i + 1))
+  done
+  wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
+  wait_for agent_pane_has main QQ || fail "keys did not reach the agent" || return
+  host_pane_filled host: ||
+    fail "keys reached the host pane: $("${HOST[@]}" capture-pane -p -t host: | grep -vx 'xx*' | head -3)"
+}
+
+test_size_action_reopens_on_the_client_showing_the_popup() {
+  local b_dir="$WORK_DIR/client-b" a b a_normal a_large b_large b_pid
+  mkdir -p "$b_dir"
+  start_host
+  start_second_client "$b_dir" || fail "second host client did not start" || return
+  a=$(host_client h)
+  b=$(host_client h2)
+  a_normal=$(inner_for 80% 80% h)
+  a_large=$(inner_for 95% 95% h)
+  b_large=$(inner_for 95% 95% h2)
+  [[ $a_large != "$b_large" ]] || fail "test setup: both host clients are $a_large" || return
+  fill_host_pane host2: || fail "host pane of the second client not filled" || return
+
+  "${HARNESS[@]}" send-keys -t h2 C-a g
+  wait_for inner_is "$(inner_for 80% 80% h2)" || fail "second client popup: $(inner_sizes)" || return
+  wait_for screen_of_has h2 ' agents ' || fail "no popup on the second client" || return
+  ! screen_has ' agents ' || fail "popup on the first client too" || return
+  # client_activity counts seconds. Afterwards the first client is the most
+  # recently active, which a guess from activity would pick.
+  sleep 1.1
+  type_text 'echo FIRST-CLIENT-ACTIVE'
+  press Enter
+  wait_for screen_has 'FIRST-CLIENT-ACTIVE' || fail "first client did not take the keys" || return
+  [[ $(most_active_host_client) == "$a" ]] ||
+    fail "test setup: most active host client is $(most_active_host_client), not $a" || return
+
+  "${HARNESS[@]}" send-keys -t h2 C-a z
+  wait_for inner_is "$b_large" || fail "after large on the second client: inner clients $(inner_sizes), expected $b_large" || return
+  wait_for popup_framed h2 "${b_large#*x}" || fail "second client popup has no border or no margin" || return
+  ! screen_has ' agents ' || fail "a popup opened on the first client" || return
+  [[ $(workspace_origin main) == "$b_dir" ]] || fail "origin: $(workspace_origin main)" || return
+
+  # Both host clients show a popup; each action must find its own.
+  b_pid=$(inner_pids)
+  press C-a g
+  wait_for inner_is "$a_large" "$b_large" || fail "with two popups: inner clients $(inner_sizes)" || return
+  wait_for screen_has ' agents ' || fail "no popup on the first client" || return
+  press C-a z
+  wait_for inner_is "$a_normal" "$b_large" ||
+    fail "after large off on the first client: inner clients $(inner_sizes), expected $a_normal $b_large" || return
+  inner_pids | grep -qx "$b_pid" || fail "the second client's popup was re-opened" || return
+  screen_of_has h2 ' agents ' || fail "the second client lost its popup"
 }
 
 # --- runner ------------------------------------------------------------------

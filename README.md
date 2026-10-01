@@ -75,6 +75,7 @@ Inside the popup, the agent server uses the same prefix as your host tmux:
 | `prefix` + `d`               | Close the popup (tmux default)            |
 | `prefix` + `c`               | Open the agent menu                       |
 | `prefix` + `G`               | Open the workspace menu                   |
+| `prefix` + `z`               | Toggle large mode                         |
 | `prefix` + `n`, `p`, `0`-`9` | Switch agent (tmux default)               |
 | `prefix` + `&`               | Kill the current agent (tmux default)     |
 | `prefix` + `s`, `w`          | Workspace and agent tree (tmux default)   |
@@ -108,7 +109,7 @@ With the default list, `claude codex gemini opencode | shell`, the menu looks li
 
 `@greenroom-<name>-key` sets the shortcut of an entry to a tmux key name, such as `x`, `X`, `1`, or `M-a`. An entry without one gets the first lowercase letter or digit of its name that no other entry took. That automatic choice skips `q`, `j`, `k`, `g`, and `G`, because `display-menu` uses them itself; an explicit key may take one of them and replaces its built-in action in the menu. An explicit key that an earlier entry already set falls back to the automatic shortcut. So does an arrow key, such as `Up` or `S-Up`, because `display-menu` does not run a shortcut on one.
 
-The agents `root`, `send`, `send-pane`, `agents`, and `workspaces` always get the automatic shortcut. Their `@greenroom-<name>-key` is one of the plugin's own key options, such as `@greenroom-root-key`, and setting it changes that key instead.
+The agents `root`, `send`, `send-pane`, `agents`, `workspaces`, `large`, `grow`, `shrink`, and `reset` always get the automatic shortcut. Their `@greenroom-<name>-key` is one of the plugin's own key options, such as `@greenroom-root-key`, and setting it changes that key instead.
 
 For example, to put the shell first and add Aider:
 
@@ -147,6 +148,32 @@ set -g @greenroom-codex-key 'x'
 | `x`     | Kill the current workspace, after a confirmation |
 
 A new workspace starts one `@greenroom-default` agent in the directory of the current workspace. Characters other than letters, digits, `_`, and `-` in a workspace name are replaced with `_`, for new and renamed workspaces and for `@greenroom-workspace`. Renaming with tmux's own `prefix` + `$` skips this; a name with `.` or `:` then cannot be picked as the last workspace.
+
+### Popup size
+
+`prefix` + `z` inside the popup toggles large mode. The popup then takes `@greenroom-large-width` by `@greenroom-large-height` of the terminal, 95% by 95% by default: almost the whole screen, but its border and a margin of the host stay visible, so it still reads as a popup. On a terminal of 20 rows or fewer, 95% leaves a single spare row, so the top border reaches the first row. Press `prefix` + `z` again to go back.
+
+To grow and shrink the popup in steps, give the other size actions a key. They have none by default:
+
+```tmux
+set -g @greenroom-grow-key '+'
+set -g @greenroom-shrink-key '-'
+set -g @greenroom-reset-key '='
+```
+
+| Key                                | Action                                                |
+| ---------------------------------- | ----------------------------------------------------- |
+| `prefix` + `z`                     | Toggle large mode (`@greenroom-large-key`)            |
+| `prefix` + `@greenroom-grow-key`   | Grow the popup by one step and leave large mode       |
+| `prefix` + `@greenroom-shrink-key` | Shrink the popup by one step and leave large mode     |
+| `prefix` + `@greenroom-reset-key`  | Go back to `@greenroom-width` and `@greenroom-height` |
+
+- A step changes the width and the height by `@greenroom-resize-step` percentage points, 10 by default, and stops at 20% and 95%. A size in cells, such as `@greenroom-width 120`, is turned into a percentage of the terminal first.
+- Percentages count the whole terminal, status line included.
+- The popup closes and opens again at the new size on the same workspace. The agents keep running and see only a resize.
+- The size stays until you reset it or the host tmux server restarts. Closing the popup, reloading the config, and sending text to an agent keep it. It is one setting for the host server: a popup on another client takes it the next time it opens.
+- `prefix` + `z` replaces tmux's own zoom key inside the popup. Set `@greenroom-large-key` to another key, or to `''` to leave large mode without a key; `prefix` + `z` zooms again from the next open.
+- The size keys do nothing in a client attached to the agent server directly, such as `tmux -L greenroom attach`, because it shows no popup.
 
 ### Lifetime
 
@@ -196,6 +223,10 @@ Shift+Enter reaches the agent inside the popup if your host tmux has `extended-k
 | `@greenroom-agents-key`     | `c`                                     | Key for the agent menu inside the popup                               |
 | `@greenroom-send-key`       | `a`                                     | Copy-mode key that sends the selection to the agent                   |
 | `@greenroom-send-pane-key`  | `S`                                     | Key that sends the visible screen of the pane to the agent            |
+| `@greenroom-large-key`      | `z`                                     | Key inside the popup that toggles large mode; `''` for none           |
+| `@greenroom-grow-key`       | empty                                   | Key inside the popup that grows it by one step                        |
+| `@greenroom-shrink-key`     | empty                                   | Key inside the popup that shrinks it by one step                      |
+| `@greenroom-reset-key`      | empty                                   | Key inside the popup that goes back to the size options               |
 | `@greenroom-agents`         | `claude codex gemini opencode \| shell` | Agent menu entries, in order                                          |
 | `@greenroom-<name>-cmd`     | `<name>`                                | Command that starts the agent called `<name>`                         |
 | `@greenroom-<name>-key`     | automatic                               | Shortcut of the agent called `<name>` in the agent menu               |
@@ -203,6 +234,9 @@ Shift+Enter reaches the agent inside the popup if your host tmux has `extended-k
 | `@greenroom-workspace`      | `main`                                  | Workspace to open when there is no last workspace                     |
 | `@greenroom-width`          | `80%`                                   | Popup width                                                           |
 | `@greenroom-height`         | `80%`                                   | Popup height                                                          |
+| `@greenroom-large-width`    | `95%`                                   | Popup width in large mode                                             |
+| `@greenroom-large-height`   | `95%`                                   | Popup height in large mode                                            |
+| `@greenroom-resize-step`    | `10`                                    | Percentage points that grow and shrink change the size by             |
 | `@greenroom-x`              | `C`                                     | Popup horizontal position                                             |
 | `@greenroom-y`              | `C`                                     | Popup vertical position                                               |
 | `@greenroom-border-lines`   | `rounded`                               | Popup border, a `popup-border-lines` value                            |
@@ -220,7 +254,7 @@ set -g @greenroom-agents 'claude codex aider | shell'
 set -g @greenroom-aider-cmd 'aider --no-auto-commits'
 ```
 
-The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-workspaces-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) and the popup options (`@greenroom-width`, `@greenroom-height`, `@greenroom-x`, `@greenroom-y`, `@greenroom-border-lines`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options are read on every open.
+The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-workspaces-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options, the popup size and position included, are read on every open. A key that the plugin stops using inside the popup is unbound; `c`, `z`, `-`, and `=` get tmux's own binding back, and other keys get theirs back when the agent server restarts.
 
 ## Customizing the agent server
 
@@ -252,10 +286,10 @@ This also stops every agent. If you changed `@greenroom-socket`, use that name i
 
 ## State
 
-The plugin writes no files. Workspaces, agents, and the last-used workspace live in the memory of the agent server.
+The plugin writes no files. Workspaces, agents, and the last-used workspace live in the memory of the agent server. The popup size lives in the memory of the host server.
 
 - Closing the popup keeps everything.
-- Restarting or killing the host tmux server keeps everything. The next host server that loads the plugin opens the same agents.
+- Restarting or killing the host tmux server keeps everything but the popup size. The next host server that loads the plugin opens the same agents.
 - Stopping the agent server, or rebooting, ends every agent. Use the resume feature of the agent CLI, such as `claude --continue`, to pick up a conversation.
 - Each agent server socket is separate. A host that sets a different `@greenroom-socket` sees different workspaces.
 
@@ -264,7 +298,8 @@ The plugin writes no files. Workspaces, agents, and the last-used workspace live
 - Two clients showing the same workspace at different popup sizes resize the window back and forth, following whichever client was used last (`window-size latest`).
 - The agent server has one global `prefix` and one origin directory per workspace. When two host servers with different settings share it, the host that opened the popup last wins.
 - Paste buffers are per server. On tmux 3.7 and later with `set-clipboard on`, a copy inside the popup still reaches the system clipboard through OSC 52, and the host stores it as a paste buffer too, so `prefix` + `]` on the host pastes it. On tmux 3.4 to 3.6 it stays inside the agent server.
-- Bell alerts go to the host server that opened the popup last.
+- Bell alerts go to the host server that opened the popup last. So do the size keys: in a popup of another host server they do nothing.
+- A size key closes and opens the popup, which takes about a quarter of a second. Keys typed meanwhile reach the agent, but size keys pressed faster than that can lose a step.
 - An upgrade of the plugin takes full effect after the agent server restarts, because `conf/agent-server.conf` is read only at start.
 
 ## Development

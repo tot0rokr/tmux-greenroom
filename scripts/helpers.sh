@@ -78,15 +78,3 @@ take_pending_name() {
 agent_command() {
   printf '%s %s' "$(quote "$SCRIPTS_DIR/run-agent.sh")" "$(quote "$1")"
 }
-
-# Fills POPUP with the host display-popup command; $1 is the start directory,
-# which tmux expands as a format.
-popup_args() {
-  POPUP=(display-popup -E -d "$1"
-    -w "$(get_tmux_option @greenroom-width 80%)"
-    -h "$(get_tmux_option @greenroom-height 80%)"
-    -x "$(get_tmux_option @greenroom-x C)"
-    -y "$(get_tmux_option @greenroom-y C)"
-    -b "$(get_tmux_option @greenroom-border-lines rounded)"
-    -T ' agents ')
-}
