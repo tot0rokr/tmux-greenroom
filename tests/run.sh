@@ -14,15 +14,20 @@ ORIGIN="$WORK_DIR/it's #S \$x;"
 TIMEOUT_SECONDS=5
 POLL_SECONDS=0.1
 
+SOCKET_DIR="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+SOCKET_NAMES=(harness host greenroom guard)
+
 PASSED=0
 FAILED=0
 FAILURES=()
 
 stop_servers() {
-  "${HARNESS[@]}" kill-server 2>/dev/null
-  "${HOST[@]}" kill-server 2>/dev/null
-  "${GREENROOM[@]}" kill-server 2>/dev/null
-  tmux -L "$ID-guard" kill-server 2>/dev/null
+  local name
+  for name in "${SOCKET_NAMES[@]}"; do
+    tmux -L "$ID-$name" kill-server 2>/dev/null
+    # kill-server leaves the socket file behind.
+    rm -f "$SOCKET_DIR/$ID-$name"
+  done
 }
 
 cleanup() {
