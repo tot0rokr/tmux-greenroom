@@ -406,6 +406,31 @@ test_greenroom_server_reads_extra_config() {
   [[ $("${GREENROOM[@]}" show-option -gqv @from-extra-config) == yes ]] || fail "extra config not read"
 }
 
+test_plain_set_hook_in_extra_config_keeps_last_workspace() {
+  # Without an index, set-hook replaces every slot of the hook, the plugin's too.
+  printf '%s\n' "set-hook -g client-session-changed 'set -g @user-hook ran'" \
+    "set-hook -g client-attached 'set -g @user-attached ran'" > "$WORK_DIR/greenroom.conf"
+  start_host "set -g @greenroom-config '$WORK_DIR/greenroom.conf'"
+  open_popup || return
+  [[ $("${GREENROOM[@]}" show-option -gqv @user-attached) == ran ]] || fail "user hook did not run on attach" || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text 'second'
+  press Enter
+  wait_for popup_on second || fail "client not on second: $(greenroom_client_session)" || return
+  wait_for greenroom_option_is @greenroom_last second || fail "last workspace: [$(greenroom_option @greenroom_last)]" || return
+  [[ $("${GREENROOM[@]}" show-option -gqv @user-hook) == ran ]] || fail "user hook did not run on switch" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  open_popup second
+}
+
+greenroom_option_is() {
+  [[ $(greenroom_option "$1") == "$2" ]]
+}
+
 test_root_key_toggles_without_prefix() {
   start_host "set -g @greenroom-root-key M-g"
   press M-g

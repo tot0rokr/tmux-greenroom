@@ -16,7 +16,9 @@ RESERVED_MENU_KEYS=' q j k g G '
 # display-menu never runs an item shortcut on an arrow key on tmux 3.7, or on
 # an arrow with a modifier (S-Up) on any version. Named keys ignore case.
 ARROW_KEY='^([CcMmSs]-|\^)*([Uu][Pp]|[Dd][Oo][Ww][Nn]|[Ll][Ee][Ff][Tt]|[Rr][Ii][Gg][Hh][Tt])$'
-# Hook array slots this plugin owns; conf/greenroom-server.conf uses 100.
+# Hook array slots this plugin owns, set again on every open: a set-hook without
+# an index (in @greenroom-config, say) replaces all slots of a hook.
+LAST_HOOK_INDEX=100
 ALERT_HOOK_INDEX=101
 
 SOCKET=$(get_tmux_option @greenroom-socket greenroom)
@@ -371,6 +373,14 @@ record_host_client() {
   [[ -n $client ]] && chain set-option -g "@greenroom_host_client_$$" "$client"
 }
 
+# @greenroom_last is the workspace a toggle opens.
+push_last_hooks() {
+  local hook
+  for hook in client-attached client-session-changed session-renamed; do
+    chain set-hook -g "$hook[$LAST_HOOK_INDEX]" "set-option -gF @greenroom_last '#{session_name}'"
+  done
+}
+
 # Bells reach the host through alert.sh; see docs/design.md (D9).
 push_alert_hooks() {
   local alert hook
@@ -432,6 +442,7 @@ main() {
   mirror_user_options
   push_state
   push_bindings
+  push_last_hooks
   push_alert_hooks
   record_host_client "$host_client"
   if [[ -n $fresh ]] || ! has_workspace "$workspace"; then

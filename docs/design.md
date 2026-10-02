@@ -95,7 +95,7 @@ tmux-greenroom의 결정과 그 이유, 근거를 남기는 설계 기록이다.
 
 ```text
 greenroom.tmux              TPM entry: bind host keys
-conf/greenroom-server.conf  greenroom server defaults: marker, status line, hooks
+conf/greenroom-server.conf  greenroom server defaults: marker, status line, terminal features
 scripts/helpers.sh          option lookup, quoting, raw option reads
 scripts/open.sh             open the host popup at the current size (host)
 scripts/attach.sh           popup job: pick and prepare a workspace, attach
@@ -216,7 +216,7 @@ tests/run.sh                integration tests on isolated tmux servers
 - greenroom server는 `bell-action any`로 둔다. 기본값 `other`에서는 popup이 닫힌 workspace의 현재 window bell에 hook이 돌지 않는다 (실측 18).
 - host socket은 `attach.sh`가 보통 열기마다 `@greenroom_host`에 기록한다 (re-open은 건너뛴다). 알림은 마지막으로 연 host로 간다.
 - status line 표시는 사용자가 `status-right`에 `#{@greenroom_alert}` 조건부 구간을 넣는다. 사용자 status line을 플러그인이 고치지 않는다. 옵션이 없으면 구간이 비므로 플러그인이 없는 환경에서도 그대로 둘 수 있다.
-- hook은 slot 101(알림), 100(마지막 workspace)에 둔다. `@greenroom-config`가 `-a`나 `[0]`처럼 index를 주면 덮이지 않는다. index 없는 `set-hook`은 배열 전체를 바꿔 slot 100도 지운다 (실측, 3.4·3.7b). 101은 `attach.sh`가 보통 열기마다 다시 건다.
+- hook은 slot 101(알림), 100(마지막 workspace)에 두고, 둘 다 `attach.sh`가 보통 열기마다 다시 건다. index 없는 `set-hook`은 배열 전체를 바꿔 플러그인 slot도 지우기 때문이다 (실측, 3.4·3.7b). 처음에는 slot 100을 `conf/greenroom-server.conf`에만 둬서, `@greenroom-config`의 index 없는 `set-hook`이 마지막 workspace 추적을 server 재시작 때까지 끊었다 (문서 검증에서 발견). `@greenroom-config`의 hook은 `-a`나 `[0]`처럼 index를 주면 플러그인 hook과 함께 남는다.
 
 ### D10. host buffer를 거쳐 attach 뒤에 붙여넣는 보내기
 

@@ -449,7 +449,7 @@ What the greenroom server takes from the host:
 
 The host's values win over the same options in `@greenroom-config`, because they are applied after the file is read. Set those options on the host, or change them in the running greenroom server, for example `tmux -L greenroom set -g mouse on`.
 
-The plugin also sets, on every open, the bindings of its own keys, `bell-action any` and its alert hooks, at hook array slot 101. Its hooks that keep `@greenroom_last`, the last workspace, up to date sit at slot 100 and are set only when the greenroom server starts, so one that your file replaces stays lost until the greenroom server restarts. A `set-hook` without an index replaces every slot of that hook, the plugin's included. Give your hooks an index below 100, such as `set-hook -g client-attached[0] 'display-message hello'`. `set-hook -ga` also leaves the plugin's slots alone, but adds the hook once more each time the file is sourced.
+The plugin also sets, on every open, the bindings of its own keys, `bell-action any` and its hooks: the ones that keep `@greenroom_last`, the last workspace, up to date at hook array slot 100, and the alert hooks at slot 101. A `set-hook` without an index replaces every slot of that hook, the plugin's included; the plugin puts its own back on the next open, but your hook then shares the array with them only if it has an index of its own. Give your hooks an index below 100, such as `set-hook -g client-attached[0] 'display-message hello'`. `set-hook -ga` also leaves the plugin's slots alone, but adds the hook once more each time the file is sourced.
 
 To apply an edited `@greenroom-config` to the running server, source it there:
 
