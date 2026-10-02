@@ -135,7 +135,8 @@ press() {
 }
 
 type_text() {
-  "${HARNESS[@]}" send-keys -t h -l "$1"
+  # -- so a text that starts with '-' is not read as flags.
+  "${HARNESS[@]}" send-keys -t h -l -- "$1"
 }
 
 screen() {
@@ -330,6 +331,27 @@ test_menu_key_options_bind_on_host_and_in_popup() {
   wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
   press C-a W
   wait_for screen_has 'New workspace' || fail "workspace menu not shown with W"
+}
+
+test_workspace_menu_lists_a_name_that_starts_with_a_dash() {
+  start_host
+  open_popup || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text '-dash'
+  press Enter
+  wait_for popup_on -dash || fail "client not on -dash: $(greenroom_client_session)" || return
+  # -dash sorts first, so it is the menu's first item and its number is 1.
+  press C-a G
+  wait_for screen_has '-dash (1) *' || fail "-dash missing from the menu" || return
+  press 2
+  wait_for popup_on main || fail "client not on main: $(greenroom_client_session)" || return
+  press C-a G
+  wait_for screen_has 'main (1) *' || fail "workspace menu not shown on main" || return
+  press 1
+  wait_for popup_on -dash || fail "-dash item could not be chosen: client on $(greenroom_client_session)"
 }
 
 test_workspace_menu_creates_and_switches() {

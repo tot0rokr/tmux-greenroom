@@ -55,7 +55,10 @@ main() {
     ((i <= MAX_NUMBERED)) && key=$i
     label="$name ($windows)"
     [[ $id == "$CURRENT" ]] && label="$label *"
-    ITEMS+=("$(format_escape "$label")" "$key" "$(format_escape "switch-client -t $(quote "$id")")")
+    label=$(format_escape "$label")
+    # display-menu draws a name that starts with '-' as a disabled item.
+    [[ $label == -* ]] && label="#[default]$label"
+    ITEMS+=("$label" "$key" "$(format_escape "switch-client -t $(quote "$id")")")
   done < <(tmux list-sessions -F "#{session_id}$(printf '\t')#{session_name}$(printf '\t')#{session_windows}")
 
   ITEMS+=('')
@@ -63,7 +66,8 @@ main() {
   action_item 'Rename workspace' r rename
   action_item 'Kill workspace' x kill
 
-  tmux display-menu -c "$CLIENT" -T '#[align=centre] workspaces ' -x C -y C "${ITEMS[@]}"
+  # A first item that starts with '-' would be read as a flag.
+  tmux display-menu -c "$CLIENT" -T '#[align=centre] workspaces ' -x C -y C -- "${ITEMS[@]}"
 }
 
 main "$@"

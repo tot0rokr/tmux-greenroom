@@ -524,6 +524,7 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, greenroom)로 실측했�
   - bash 4.2 이하는 `"${1//\'/...}"`의 치환 문자열에서 quote를 제거하지 않는다. `quote()`가 중첩 quoting에서 깨져 profile 메뉴와 새 workspace가 동작하지 않았다 (리뷰 실측, 당시 테스트를 `BASH_COMPAT=3.2`로 돌린 결과 11/16). 치환 문자열을 변수에 담아 고쳤다.
   - `new-session -c`는 경로를 format으로 확장한다. `#S`가 든 디렉토리는 엉뚱한 곳에서 시작했고, tmux 3.4에서는 `#(...)`가 든 디렉토리 이름이 명령을 실행했다 (리뷰 실측). 시작 디렉토리는 `format_escape`를 거친다.
   - 새 workspace의 origin과 입력 이름을 `display-message`, `show-option`으로 읽어 3.4에서 `$`가 깨졌다. `read_raw_options`로 바꿨다.
+  - workspace 메뉴는 profile·command 메뉴와 달리 첫 항목 앞에 `--`가 없고 `-`로 시작하는 이름에 `#[default]`도 붙이지 않았다. 이름이 `-dash`인 workspace가 맨 앞이면 메뉴가 `unknown flag`로 뜨지 않았다 (문서 검증에서 발견, 실측). 테스트 helper `type_text`도 `send-keys -l`에 `--`가 없어 `-`로 시작하는 글자를 플래그로 읽었다.
   - 명령 출력에서 tmux는 백슬래시를 `\\`로 찍고, 3.4는 구분자 byte도 `\037`로 찍는다 (리뷰 실측, 3.4·3.7b). `client_values`가 모든 `\037`을 구분자로 바꿔 이름에 글자로 든 `\037`(출력은 `\\037`)이 갈라졌다. 줄에 구분자 byte가 없을 때만, `\\` 쌍을 뺀 `\037`만 바꾼다. 3.4에서 0x1F byte가 든 이름은 여전히 구분자와 같아 보인다 (3.7b는 그런 이름을 받지 않는다). 값은 tmux가 찍은 그대로 둔다. 메뉴 목록의 이름과 같다.
 - 대상 client와 session
   - workspace 메뉴의 전환·삭제 대상은 이름 대신 session ID를 쓴다. 이름 변경도 입력값을 정리하는 스크립트를 거친다.
