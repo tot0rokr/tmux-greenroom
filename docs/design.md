@@ -436,8 +436,8 @@ popup 안 (greenroom server):
 | `@greenroom_host_client_<pid>` | greenroom 전역       | inner client pid별 host client 이름 (D11)                    |
 | `@greenroom_pending_<pid>`     | greenroom 전역       | inner client pid별로 prompt에 입력한 workspace 이름 (D6)     |
 | `@greenroom_key`               | greenroom 전역       | status line 힌트의 닫기 키                                   |
-| `@greenroom_profiles_key`      | greenroom 전역       | popup 안 profile 메뉴 키. 기록만 하고 읽는 곳은 없다         |
-| `@greenroom_workspaces_key`    | greenroom 전역       | popup 안 workspace 메뉴 키. 기록만 하고 읽는 곳은 없다       |
+| `@greenroom_profiles_key`      | greenroom 전역       | popup 안 profile 메뉴 키. 사용자 status line용               |
+| `@greenroom_workspaces_key`    | greenroom 전역       | popup 안 workspace 메뉴 키. 사용자 status line용             |
 | `@greenroom_commands_key`      | greenroom 전역       | status line 힌트의 command 메뉴 키. 비면 힌트를 숨긴다 (D12) |
 | `@greenroom_default`           | greenroom 전역       | 새 workspace의 첫 profile. `new-workspace.sh`가 읽는다       |
 | `@greenroom_origin`            | greenroom workspace  | workspace의 origin 경로                                      |

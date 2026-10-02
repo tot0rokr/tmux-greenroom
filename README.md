@@ -440,7 +440,7 @@ set -g status-style 'bg=colour236'
 run-shell ~/.tmux/plugins/tmux-cuecard/cuecard.tmux
 ```
 
-`conf/greenroom-server.conf` sets the status line, `detach-on-destroy on`, which closes the popup with the last window of its workspace, and `terminal-features` for colors, Shift+Enter and OSC 52. If you replace `window-status-format`, keep `#{?window_bell_flag,!,}` for the bell marker. The default `status-right` shows the close key and the command menu key with `#{@greenroom_key}` and `#{@greenroom_commands_key}`, which a status line of your own can use too.
+`conf/greenroom-server.conf` sets the status line, `detach-on-destroy on`, which closes the popup with the last window of its workspace, and `terminal-features` for colors, Shift+Enter and OSC 52. If you replace `window-status-format`, keep `#{?window_bell_flag,!,}` for the bell marker. The default `status-right` shows the close key and the command menu key with `#{@greenroom_key}` and `#{@greenroom_commands_key}`. A status line of your own can use those two and also `#{@greenroom_profiles_key}` and `#{@greenroom_workspaces_key}`; the plugin sets all four on every open, so they always hold the current keys.
 
 What the greenroom server takes from the host:
 
