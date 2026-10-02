@@ -47,7 +47,7 @@ popup_args() {
     y='#{e|+:#{popup_height},#{e|/:#{e|-:#{client_height},#{popup_height}},2}}'
   fi
   POPUP=(-E -d "$1" -w "$width" -h "$height" -x "${x:-C}" -y "$y"
-    -b "${lines:-rounded}" -T ' agents ')
+    -b "${lines:-rounded}" -T ' greenroom ')
 }
 
 main() {

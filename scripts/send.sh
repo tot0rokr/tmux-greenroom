@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Host side of "send to agent". Leaves the text in a host buffer and opens the
-# popup; attach.sh --paste moves it into the agent server.
+# Host side of sending text to the popup. Leaves the text in a host buffer and
+# opens the popup; attach.sh --paste moves it into the greenroom server.
 #
 #   send.sh selection <client> <origin>         text on stdin
 #   send.sh pane <client> <origin> <pane>       the pane's visible screen

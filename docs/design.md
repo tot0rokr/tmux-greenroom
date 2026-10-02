@@ -1,15 +1,15 @@
 # tmux-greenroom 설계
 
-상태: M1·M2 구현 완료 (2026-09-30), P1 bell 알림·P2 agent로 보내기 구현 (2026-10-01). P3는 clipboard로 충분해 구현하지 않고, P4는 뺐다.
+상태: M1·M2 구현 완료 (2026-09-30), P1 bell 알림·P2 popup으로 보내기 구현 (2026-10-01). P3는 clipboard로 충분해 구현하지 않고, P4는 뺐다.
 
 이름: 처음 이름은 tmux-llm-agent였다. 공개 전에 tmux-greenroom으로 바꿨다. 출연자가 무대에 오르기 전에 대기하는 green room처럼, agent들이 popup 밖에서 돌며 기다린다는 뜻이다. tmux-cuecard와 같은 무대 비유다.
 
 ## 목표
 
-- 어느 tmux session·window에서든 같은 키로 agent popup을 열고 닫는다.
-- popup을 닫으면 detach만 한다. agent 프로세스는 계속 돌고, 다시 열면 그 화면 그대로 이어서 쓴다.
-- popup 하나에 agent를 여러 개 띄운다. 용도별로 이름 붙인 popup(workspace)도 여러 개 둔다.
-- Claude Code, Codex, Gemini CLI, OpenCode를 기본 지원하고, 다른 CLI는 옵션 한 줄로 추가한다.
+- 어느 tmux session·window에서든 같은 키로 popup을 열고 닫는다.
+- popup을 닫으면 detach만 한다. window의 프로세스는 계속 돌고, 다시 열면 그 화면 그대로 이어서 쓴다.
+- popup 하나에 window를 여러 개 띄운다. 용도별로 이름 붙인 popup(workspace)도 여러 개 둔다.
+- Claude Code, Codex, Gemini CLI, OpenCode를 기본 profile로 두고, 다른 CLI는 옵션 한 줄로 추가한다.
 
 ## 비목표
 
@@ -19,125 +19,126 @@
 
 ## 용어
 
-| 용어         | 뜻                                                    |
-| ------------ | ----------------------------------------------------- |
-| host server  | 사용자가 평소 쓰는 tmux server                        |
-| agent server | 이 플러그인 전용 tmux server, `tmux -L greenroom`     |
-| workspace    | agent server의 session 하나. popup 하나에 대응        |
-| agent        | workspace의 window 하나. agent CLI 하나를 실행        |
-| origin pane  | popup을 연 host pane. 새 agent의 작업 디렉토리 기준   |
+| 용어             | 뜻                                                                        |
+| ---------------- | ------------------------------------------------------------------------- |
+| host server      | 사용자가 평소 쓰는 tmux server                                            |
+| greenroom server | 이 플러그인 전용 tmux server, `tmux -L greenroom`                         |
+| workspace        | greenroom server의 session 하나. popup 하나에 대응                        |
+| profile          | 이름 붙은 명령 하나(`claude`, `shell`, `lazygit` 등). profile 메뉴의 항목 |
+| window           | workspace의 window 하나. profile 하나를 실행                              |
+| origin pane      | popup을 연 host pane. 새 window의 작업 디렉토리 기준                      |
 
 ## 구조
 
 ```
- host server (your tmux)                 agent server (tmux -L greenroom)
-┌────────────────────────────────┐      ┌─────────────────────────────┐
-│ session "work"                 │      │ workspace "main"            │
-│  └ popup: attach.sh ───────────┼─────▶│  ├ window 0: claude         │
-│                                │      │  └ window 1: codex          │
-│ session "notes"                │      │                             │
-│  └ popup: attach.sh ───────────┼─────▶│ workspace "review"          │
-│                                │      │  └ window 0: claude         │
-└────────────────────────────────┘      └─────────────────────────────┘
+ host server (your tmux)                 greenroom server (tmux -L greenroom)
+┌────────────────────────────────┐      ┌───────────────────────────────────┐
+│ session "work"                 │      │ workspace "main"                  │
+│  └ popup: attach.sh ───────────┼─────▶│  ├ window 0: claude               │
+│                                │      │  └ window 1: codex                │
+│ session "notes"                │      │                                   │
+│  └ popup: attach.sh ───────────┼─────▶│ workspace "review"                │
+│                                │      │  └ window 0: claude               │
+└────────────────────────────────┘      └───────────────────────────────────┘
 ```
 
-- 어느 host session에서 열든 같은 agent server에 붙는다. 두 host client가 같은 workspace를 동시에 열 수도 있다.
-- popup 안의 프로세스는 `tmux -L greenroom attach` 하나뿐이다. agent 프로세스는 agent server가 소유한다.
+- 어느 host session에서 열든 같은 greenroom server에 붙는다. 두 host client가 같은 workspace를 동시에 열 수도 있다.
+- popup 안의 프로세스는 `tmux -L greenroom attach` 하나뿐이다. window의 프로세스는 greenroom server가 소유한다.
 
 ## 핵심 결정
 
-### D1. 전용 agent server
+### D1. 전용 greenroom server
 
 - workspace를 host server의 session으로 두지 않고 `tmux -L <socket>` 전용 server에 둔다.
 - 이유
   - host의 session 목록(`choose-tree`, `switch-client -n`, tmux-fzf, tmux-resurrect)을 오염시키지 않는다. tmux-toggle-popup도 같은 이유로 전용 server를 기본값으로 둔다.
-  - popup 안에서 `prefix + s`/`w`를 누르면 workspace와 agent만 보인다.
-  - host server를 kill해도 agent는 산다. 같은 사용자의 다른 host server(`tmux -L work` 등)에서도 같은 workspace를 연다.
+  - popup 안에서 `prefix + s`/`w`를 누르면 workspace와 그 window만 보인다.
+  - host server를 kill해도 window는 산다. 같은 사용자의 다른 host server(`tmux -L work` 등)에서도 같은 workspace를 연다.
 - 대가
   - paste buffer가 server별로 분리된다. OSC 52 clipboard가 popup을 통과하는 건 tmux 3.7부터다 (tmux CHANGES "3.6b TO 3.7", 리뷰 조사). buffer 동기화는 제안 P3.
-  - agent server에 설정과 바인딩을 따로 적용해야 한다 (D3, D5, D7).
+  - greenroom server에 설정과 바인딩을 따로 적용해야 한다 (D3, D5, D7).
 - 기각안: host server에 숨긴 session (tmux-floax, tmux-claude-hatch 방식). 코드는 더 짧지만 목록 오염이 그대로 남는다.
 
 ### D2. popup job이 준비와 attach를 맡는다
 
 - host 바인딩은 `run-shell -b`로 `open.sh`를 실행하고, `open.sh`가 `display-popup -E -d <origin 경로> ... attach.sh`로 popup을 연다 (D11).
-- `attach.sh`는 popup 안에서 실행된다. agent server와 workspace가 없으면 만들고, 설정을 적용한 뒤 `exec tmux -L <socket> attach`한다.
+- `attach.sh`는 popup 안에서 실행된다. greenroom server와 workspace가 없으면 만들고, 설정을 적용한 뒤 `exec tmux -L <socket> attach`한다.
 - 이유
   - popup job의 cwd가 곧 origin pane 경로다. `attach.sh` 명령에 경로를 끼워 넣지 않으므로 공백·따옴표가 있어도 안전하다. 바인딩에서 `open.sh`로 넘길 때는 `#{q:pane_current_path}`가 셸용으로 quote한다. `-d`는 format으로 확장되어 `open.sh`가 `format_escape`한다 (tmux 3.3a `cmd-display-menu.c`, 리뷰 조사).
   - popup job의 `$TMUX`는 host server를 가리키므로 host 옵션을 바로 읽는다.
 - 주의
-  - popup 안에서 `-L` 없이 `tmux`를 부르면 `$TMUX` 때문에 host server로 간다. host 쪽 코드의 agent server 호출은 항상 `-L`을 붙인다. agent server 안에서 도는 스크립트는 `$TMUX`가 agent server라 `-L`이 필요 없다.
-  - agent server를 새로 띄울 때는 `TMUX`, `TMUX_PANE`을 지운다. `TMUX_PANE`이 남으면 agent server 전역 환경으로 새어 들어간다 (리뷰 실측).
+  - popup 안에서 `-L` 없이 `tmux`를 부르면 `$TMUX` 때문에 host server로 간다. host 쪽 코드의 greenroom server 호출은 항상 `-L`을 붙인다. greenroom server 안에서 도는 스크립트는 `$TMUX`가 greenroom server라 `-L`이 필요 없다.
+  - greenroom server를 새로 띄울 때는 `TMUX`, `TMUX_PANE`을 지운다. `TMUX_PANE`이 남으면 greenroom server 전역 환경으로 새어 들어간다 (리뷰 실측).
   - `display-popup`의 shell-command는 format으로 확장되지 않는다 (실측 9). `open.sh`가 넘기는 `attach.sh` 명령에는 `#` escape를 하지 않는다. format으로 확장되는 `run-shell` 바인딩 안의 `open.sh` 경로는 escape한다.
 
-### D3. agent server도 host와 같은 prefix
+### D3. greenroom server도 host와 같은 prefix
 
-- `attach.sh`가 host의 `prefix`, `prefix2`를 읽어 여는 때마다 agent server에 설정한다.
+- `attach.sh`가 host의 `prefix`, `prefix2`를 읽어 여는 때마다 greenroom server에 설정한다.
 - popup이 열려 있는 동안 host는 key table을 처리하지 않고 모든 키를 popup job에 넘긴다. 그래서 중첩 tmux의 이중 prefix 문제가 없다.
   - 실측: 검증 근거 1~3.
   - 사실: tmux 3.3a `server-client.c`의 `server_client_handle_key`는 key table 조회보다 `overlay_key`를 먼저 호출한다 (조사, 리뷰가 교차 확인).
-- 닫기 키는 host의 열기 키와 같은 키를 agent server에서 `detach-client`로 바인딩해 만든다. 같은 키가 열고 닫는 토글이 된다.
+- 닫기 키는 host의 열기 키와 같은 키를 greenroom server에서 `detach-client`로 바인딩해 만든다. 같은 키가 열고 닫는 토글이 된다.
 - 바인딩한 키는 양쪽 server의 `@greenroom_bound`에 기록하고, 다음 적용 때 먼저 unbind한다. 키 옵션을 바꿔도 옛 키가 남지 않는다.
-  - agent server에서 tmux 기본 바인딩이 있는 `c`, `z`(플러그인 기본 키)와 `-`, `=`(README 예시)는 unbind 대신 tmux 바인딩(`new-window`, `resize-pane -Z`, `delete-buffer`, `choose-buffer -Z`)으로 되돌린다. 그 밖의 키는 agent server를 재시작할 때까지 비어 있다.
-  - 이유: tmux에는 기본 바인딩 하나를 되살리는 명령이 없다. 처음 바인딩하기 전 값도 읽을 수 없다. 새 agent server는 바인딩을 넣는 그 준비 명령 안에서 뜬다.
+  - greenroom server에서 tmux 기본 바인딩이 있는 `c`, `z`(플러그인 기본 키)와 `-`, `=`(README 예시)는 unbind 대신 tmux 바인딩(`new-window`, `resize-pane -Z`, `delete-buffer`, `choose-buffer -Z`)으로 되돌린다. 그 밖의 키는 greenroom server를 재시작할 때까지 비어 있다.
+  - 이유: tmux에는 기본 바인딩 하나를 되살리는 명령이 없다. 처음 바인딩하기 전 값도 읽을 수 없다. 새 greenroom server는 바인딩을 넣는 그 준비 명령 안에서 뜬다.
 
-### D4. workspace는 session, agent는 window
+### D4. workspace는 session, profile은 window로 띄운다
 
-- popup 하나가 workspace(session) 하나, 그 안의 탭이 agent(window)다.
+- popup 하나가 workspace(session) 하나, 그 안의 탭이 window다. window마다 profile 하나를 실행한다.
 - tmux 기본 기능이 그대로 동작한다.
-  - `prefix + n`/`p`/숫자: agent 전환
-  - `prefix + &`: agent 종료
+  - `prefix + n`/`p`/숫자: window 전환
+  - `prefix + &`: window 종료
   - `prefix + $`: workspace 이름 변경
   - `prefix + s`: workspace 전환
-- 기각안: agent마다 session. 한 popup에서 agent를 탭처럼 오가려면 전환 UI를 직접 만들어야 한다.
+- 기각안: profile마다 session. 한 popup에서 window를 탭처럼 오가려면 전환 UI를 직접 만들어야 한다.
 
-### D5. agent server는 사용자 tmux.conf를 읽지 않는다
+### D5. greenroom server는 사용자 tmux.conf를 읽지 않는다
 
-- agent server는 시작할 때 `-f conf/agent-server.conf`와, 설정돼 있으면 `-f <@greenroom-config>`를 읽는다.
+- greenroom server는 시작할 때 `-f conf/greenroom-server.conf`와, 설정돼 있으면 `-f <@greenroom-config>`를 읽는다.
   - `-f`를 여러 번 주면 순서대로 모두 읽고, 앞 파일의 에러가 뒤 파일이나 이어지는 명령을 끊지 않는다 (실측 10). 사용자 conf의 오타가 workspace 준비를 막지 않는다.
-- 이유: 사용자 conf를 읽으면 TPM이 모든 플러그인을 agent server에서 다시 실행한다. tmux-continuum 같은 플러그인은 host의 저장본을 agent server 상태로 덮어쓸 수 있다.
+- 이유: 사용자 conf를 읽으면 TPM이 모든 플러그인을 greenroom server에서 다시 실행한다. tmux-continuum 같은 플러그인은 host의 저장본을 greenroom server 상태로 덮어쓸 수 있다.
 - popup 안에서 쓰고 싶은 플러그인은 `@greenroom-config` 파일에서 직접 `run-shell`한다. 예: `run-shell ~/.tmux/plugins/tmux-cuecard/cuecard.tmux`.
-- `conf/agent-server.conf`는 `@greenroom_server`를 설정하고, `greenroom.tmux`는 이 값이 있으면 아무것도 하지 않는다. 사용자가 전체 conf를 지정해도 이 플러그인이 agent server 안에서 host 바인딩을 만들지는 않는다. 다른 플러그인의 부작용은 막지 못한다.
-  - 초안의 환경 변수 방식(`GREENROOM_SERVER=1`)은 버렸다. agent pane에서 띄운 다른 tmux server로 새어 나가 거기서 플러그인이 꺼진다 (리뷰 실측).
+- `conf/greenroom-server.conf`는 `@greenroom_server`를 설정하고, `greenroom.tmux`는 이 값이 있으면 아무것도 하지 않는다. 사용자가 전체 conf를 지정해도 이 플러그인이 greenroom server 안에서 host 바인딩을 만들지는 않는다. 다른 플러그인의 부작용은 막지 못한다.
+  - 초안의 환경 변수 방식(`GREENROOM_SERVER=1`)은 버렸다. greenroom server의 pane에서 띄운 다른 tmux server로 새어 나가 거기서 플러그인이 꺼진다 (리뷰 실측).
 
 ### D6. 메뉴는 `display-menu`, 외부 의존성 없음
 
-- agent 종류 선택과 workspace 선택을 tmux 내장 `display-menu`로 만든다. bash와 tmux만 있으면 된다.
+- profile 선택과 workspace 선택을 tmux 내장 `display-menu`로 만든다. bash와 tmux만 있으면 된다.
 - `display-menu`의 이름과 명령은 format으로 확장된다 (man page). 메뉴 명령에 넣는 문자열은 `#`을 `##`로 escape한다.
 - 셸과 tmux parser 양쪽에 같은 single-quote 규칙(`'\''`)을 쓴다. tmux parser도 sh처럼 인접 quoted 토큰을 이어 붙인다 (실측 11).
 - 사용자가 입력하는 workspace 이름은 `command-prompt`의 `%%%`(따옴표 escape)로 option에 먼저 저장하고, 스크립트가 option에서 읽는다. 입력값이 셸 명령줄을 거치지 않는다.
-- agent 메뉴는 `@greenroom-agents` 목록 하나가 구성과 순서를 모두 정한다. `|`는 구분선이고, `shell`도 자동으로 붙이지 않는 일반 항목이다. 추가·삭제·순서 변경이 옵션 한 줄로 끝난다.
+- profile 메뉴는 `@greenroom-profiles` 목록 하나가 구성과 순서를 모두 정한다. `|`는 구분선이고, `shell`도 자동으로 붙이지 않는 일반 항목이다. 추가·삭제·순서 변경이 옵션 한 줄로 끝난다.
   - 잘못된 이름은 건너뛰고, 중복 이름은 첫 자리만 남긴다. `@greenroom-default`는 목록과 별개라 목록에 없는 이름도 된다.
   - 앞·끝·연속 `|`는 플러그인이 지운다. tmux는 앞 구분선을 버리고 연속 구분선을 합치지만 끝 구분선은 그린다 (실측, 3.4·3.7b).
-  - 단축키는 `@greenroom-<name>-key`를 먼저 배정하고, 남은 항목에 자동 단축키를 준다. 항목 단축키는 `display-menu`의 내장 키보다 우선하므로 자동 단축키는 `q j k g G`를 피한다. 화살표 키는 단축키로 발동하지 않으므로 자동 규칙으로 돌린다. 맨 화살표는 3.7b에서, modifier가 붙은 화살표(`S-Up`, `C-Up`, `M-Up`)는 3.4·3.7b 모두 그렇다 (실측). 이름 있는 키는 대소문자를 가리지 않아 `up`도 `Up`이다.
-  - `root`, `send`, `send-pane`, `agents`, `workspaces`, `large`, `grow`, `shrink`, `reset`은 늘 자동 단축키를 쓴다. 이 이름의 `@greenroom-<name>-key`는 플러그인 키 옵션(`@greenroom-root-key` 등)이라 단축키로 읽으면 두 설정이 서로를 바꾼다.
+  - 단축키는 `@greenroom-profile-<name>-key`를 먼저 배정하고, 남은 항목에 자동 단축키를 준다. 항목 단축키는 `display-menu`의 내장 키보다 우선하므로 자동 단축키는 `q j k g G`를 피한다. 화살표 키는 단축키로 발동하지 않으므로 자동 규칙으로 돌린다. 맨 화살표는 3.7b에서, modifier가 붙은 화살표(`S-Up`, `C-Up`, `M-Up`)는 3.4·3.7b 모두 그렇다 (실측). 이름 있는 키는 대소문자를 가리지 않아 `up`도 `Up`이다.
+  - profile 옵션은 `@greenroom-profile-` 접두어를 써서 플러그인 키 옵션(`@greenroom-root-key` 등)과 이름이 겹치지 않는다. `root`, `send`, `grow` 같은 이름의 profile도 자기 `@greenroom-profile-<name>-key`를 쓴다.
   - `;`로 끝나는 단축키(`;`, `M-;`)는 `tmux_arg`를 두 번 거친다. `bind-key`가 명령 인자를 한 번 더 parse하므로, 한 번만 escape하면 `;`가 `display-menu`를 끊고 준비 명령 전체가 실패한다 (실측, 3.4·3.7b).
   - 첫 항목 이름이 `-`로 시작하면 `display-menu`가 flag로 읽어 실패하므로 항목 앞에 `--`를 둔다. `-`로 시작하는 이름은 비활성으로 그려져서 앞에 `#[default]`를 붙인다 (실측).
 
 ### D7. 사용자 옵션은 여는 때마다 통째로 복사한다
 
 - 옵션 이름공간을 나눈다. `@greenroom-*`는 사용자 옵션, `@greenroom_*`는 플러그인 상태다.
-- 여는 때마다 agent server의 `@greenroom-*`를 모두 지우고 host의 `@greenroom-*`를 모두 복사한다. host에서 바꾸거나 지운 옵션이 다음 열기에 반영된다.
+- 여는 때마다 greenroom server의 `@greenroom-*`를 모두 지우고 host의 `@greenroom-*`를 모두 복사한다. host에서 바꾸거나 지운 옵션이 다음 열기에 반영된다.
 - 값은 paste buffer를 거쳐 읽는다 (`run-shell -C 'set-buffer "#{q:...}"'` 후 `save-buffer -`).
-  - 이유: tmux 3.4는 `show-option`, `display-message`, `show-options` 출력에서 `$`를 escape하고 백슬래시는 그대로 둔다. 출력만으로는 원래 값을 되살릴 수 없다 (실측 12). agent 명령에는 `$`가 흔히 들어간다.
-  - agent server 안의 `run-agent.sh`도 같은 방식으로 명령을 읽는다.
+  - 이유: tmux 3.4는 `show-option`, `display-message`, `show-options` 출력에서 `$`를 escape하고 백슬래시는 그대로 둔다. 출력만으로는 원래 값을 되살릴 수 없다 (실측 12). profile 명령에는 `$`가 흔히 들어간다.
+  - greenroom server 안의 `run-profile.sh`도 같은 방식으로 명령을 읽는다.
 - 모든 준비 명령은 tmux 호출 하나로 묶어 보낸다. 두 client가 동시에 열어 한쪽의 `new-session`이 실패해도, workspace가 결국 있으면 그대로 attach한다.
 
-### D8. agent는 wrapper로 실행한다
+### D8. profile은 wrapper로 실행한다
 
-- window는 agent 명령을 직접 실행하지 않고 `run-agent.sh <name>`을 실행한다.
-- wrapper는 명령을 `$SHELL -lc`로 실행한다. login shell이라 사용자 profile의 PATH가 적용된다.
+- window는 profile 명령을 직접 실행하지 않고 `run-profile.sh <name>`을 실행한다.
+- wrapper는 명령을 `$SHELL -lc`로 실행한다. login shell이라 사용자 셸 설정(`~/.profile` 등)의 PATH가 적용된다.
 - exit status가 0이 아니면 `[<name> exited with status N. Press any key to close.]`를 출력하고 키 하나를 기다린 뒤 끝난다.
   - 초안의 `remain-on-exit failed`는 버렸다. Ctrl-C에 0이 아닌 status로 끝나는 CLI는 매번 죽은 pane을 `prefix + x`로 치워야 했다 (리뷰 지적).
-  - wrapper는 `trap : INT`로 Ctrl-C를 견딘다. 무시(`trap '' INT`)가 아니라 handler라서 agent에게 상속되지 않는다.
-- 메뉴에서 PATH에 없는 agent를 비활성으로 표시하는 기능은 버렸다. 검사하는 환경(popup job)과 실행 환경(login shell)의 PATH가 달라 오탐이 난다. 없는 명령은 status 127로 알려 준다.
+  - wrapper는 `trap : INT`로 Ctrl-C를 견딘다. 무시(`trap '' INT`)가 아니라 handler라서 실행한 명령에 상속되지 않는다.
+- 메뉴에서 PATH에 없는 profile을 비활성으로 표시하는 기능은 버렸다. 검사하는 환경(popup job)과 실행 환경(login shell)의 PATH가 달라 오탐이 난다. 없는 명령은 status 127로 알려 준다.
 
 ### D9. bell 알림은 tmux의 bell flag를 그대로 쓴다
 
-- 알림의 근원은 agent가 내는 터미널 bell 하나다. 플러그인은 agent CLI 설정을 건드리지 않는다. bell을 내게 할지는 사용자가 agent 쪽(예: 작업 종료 hook)에서 정한다.
+- 알림의 근원은 window의 프로그램이 내는 터미널 bell 하나다. 플러그인은 agent CLI 설정을 건드리지 않는다. bell을 내게 할지는 사용자가 agent CLI 쪽(예: 작업 종료 hook)에서 정한다.
 - tmux는 아무 client도 보고 있지 않은 window에만 bell flag를 세우고, client가 그 window를 보면 지운다 (실측 17). 그래서 "놓친 bell" 목록은 `window_bell_flag`가 1인 window 그대로다. 플러그인이 따로 상태를 들고 있지 않는다.
-- agent server의 `alert-bell` hook이 `alert.sh bell`을, attach·전환·window 종료 hook들이 `alert.sh refresh`를 실행한다. `alert.sh`는 목록을 host의 `@greenroom_alert`에 쓰고, bell일 때는 host client마다 `display-message`를 띄운다.
-- agent server는 `bell-action any`로 둔다. 기본값 `other`에서는 popup이 닫힌 workspace의 현재 window bell에 hook이 돌지 않는다 (실측 18).
+- greenroom server의 `alert-bell` hook이 `alert.sh bell`을, attach·전환·window 종료 hook들이 `alert.sh refresh`를 실행한다. `alert.sh`는 목록을 host의 `@greenroom_alert`에 쓰고, bell일 때는 host client마다 `display-message`를 띄운다.
+- greenroom server는 `bell-action any`로 둔다. 기본값 `other`에서는 popup이 닫힌 workspace의 현재 window bell에 hook이 돌지 않는다 (실측 18).
 - host socket은 `attach.sh`가 여는 때마다 `@greenroom_host`에 기록한다. 알림은 마지막으로 연 host로 간다.
 - status line 표시는 사용자가 `status-right`에 `#{@greenroom_alert}` 조건부 구간을 넣는다. 사용자 status line을 플러그인이 고치지 않는다. 옵션이 없으면 구간이 비므로 플러그인이 없는 환경에서도 그대로 둘 수 있다.
 - hook은 slot 101(알림), 100(마지막 workspace)에 둔다. `@greenroom-config`가 slot 0에 hook을 걸어도 덮이지 않는다.
@@ -145,13 +146,13 @@
 ### D10. host 내용 보내기는 host buffer를 거쳐 attach 뒤에 붙여넣는다
 
 - copy-mode의 `pipe-and-cancel`(복사하지 않고 넘기기만 함)이나 `capture-pane`으로 얻은 텍스트를 `send.sh`가 host buffer `greenroom_send`에 넣고 popup을 연다.
-- popup의 `attach.sh --paste`가 그 buffer를 agent server로 옮기고, attach 직후 `paste.sh`가 대상 pane에 `paste-buffer -p`(bracketed paste)한다. Enter는 보내지 않는다.
-- 새로 만든 workspace는 agent가 아직 입력을 받지 못할 수 있다. tmux에는 bracketed paste 모드를 알려 주는 format이 없어서, 화면이 그려지고 0.3초 간격 두 번 같을 때까지(최대 10초) 기다린 뒤 붙여넣는다. 이미 떠 있는 agent에는 바로 붙여넣는다.
+- popup의 `attach.sh --paste`가 그 buffer를 greenroom server로 옮기고, attach 직후 `paste.sh`가 대상 pane에 `paste-buffer -p`(bracketed paste)한다. Enter는 보내지 않는다.
+- 새로 만든 workspace의 첫 window는 아직 입력을 받지 못할 수 있다. tmux에는 bracketed paste 모드를 알려 주는 format이 없어서, 화면이 그려지고 0.3초 간격 두 번 같을 때까지(최대 10초) 기다린 뒤 붙여넣는다. 이미 떠 있는 window에는 바로 붙여넣는다.
 - 사용자 paste buffer와 clipboard는 건드리지 않는다. 쓰고 난 `greenroom_send`는 지운다.
 
 ### D11. popup 크기는 host 상태로 두고, 바꿀 때 popup을 다시 연다
 
-- 크기는 host server의 상태 옵션이다. 크기 키를 누르면 agent server의 `size.sh`가 새 크기를 host에 쓰고, host가 같은 client에 같은 workspace로 popup을 닫았다 다시 연다. agent는 resize만 겪는다.
+- 크기는 host server의 상태 옵션이다. 크기 키를 누르면 greenroom server의 `size.sh`가 새 크기를 host에 쓰고, host가 같은 client에 같은 workspace로 popup을 닫았다 다시 연다. window는 resize만 겪는다.
 - 이유: 열린 popup의 크기를 바꾸는 명령이 없다. 이미 popup이 떠 있는 client에 `display-popup`을 다시 하면 조용히 버려진다 (실측 26). `-w`, `-h`는 format으로 확장되지 않아서 바인딩이 상태 옵션을 직접 쓸 수도 없다 (실측 21).
 - host popup은 `scripts/open.sh` 한 곳에서만 연다.
   - host 바인딩은 `run-shell -b "open.sh '#{client_name}' #{q:pane_current_path}"`다. `display-popup`은 `-e`도 shell-command도 확장하지 않아 client 이름을 job에 넘길 수 없고, `run-shell`은 확장한다 (실측 22). `send.sh`도 `open.sh --paste`를 쓴다.
@@ -167,7 +168,7 @@
   - 결과가 지금 상태와 같으면(95%에서 `grow`) 다시 열지 않는다.
   - host server 옵션이라 popup을 닫았다 열어도, `prefix + S`로 열어도 유지되고, reset이나 host server 재시작으로 사라진다. host client 모두가 하나를 같이 쓴다.
 - re-open
-  - `size.sh`는 상태를 쓰는 명령과 `run-shell -b "open.sh <client> <origin> --reopen <workspace>"`를 host 호출 하나로 보내고 바로 끝난다. popup을 기다리는 `display-popup`은 host job에 남고 agent server에는 job이 남지 않는다 (실측 25).
+  - `size.sh`는 상태를 쓰는 명령과 `run-shell -b "open.sh <client> <origin> --reopen <workspace>"`를 host 호출 하나로 보내고 바로 끝난다. popup을 기다리는 `display-popup`은 host job에 남고 greenroom server에는 job이 남지 않는다 (실측 25).
   - `open.sh --reopen`은 `display-popup -C -c <client> ; display-popup -c <client> ...`를 한 명령 목록으로 보낸다. 두 번 나눠 부르면 host pane이 비치고 그 사이 키가 host pane으로 간다 (실측 27, 28). `-C`를 빼면 3.4는 무시하고 3.7b는 제목·테두리만 바꾼다 (실측 26).
   - 시작 디렉토리는 workspace의 `@greenroom_origin`(raw로 읽음)이다.
   - 새 popup job은 `attach.sh --reopen`이다. workspace와 설정은 준비돼 있으므로 host client만 기록하고 바로 attach한다. 보통 열기처럼 준비를 다시 하면 새 popup이 0.5초쯤 빈 채로 있다 (실측 32). `@greenroom_origin`도 건드리지 않는다.
@@ -175,10 +176,10 @@
 - host client 찾기
   - `open.sh`가 host client 이름을 `attach.sh --client`로 넘긴다. `attach.sh`는 준비 명령에 `set-option -g @greenroom_host_client_<$$> <client>`를 넣고 `exec tmux attach`한다. 그래서 `$$`가 inner client의 `#{client_pid}`다 (실측 30). 크기 키는 `'#{client_pid}'`로 이 기록을 찾는다.
   - 보통 열기는 `list-clients`에 없는 pid의 기록을 같은 준비 명령에서 지운다. re-open은 지우지 않는다. 사라지는 client가 마지막으로 보낸 크기 키도 자기 기록을 찾아야 한다.
-  - 기록이 없으면 아무것도 하지 않는다. 크기 키는 agent server의 모든 client에 걸리므로, agent server에 직접 attach한 client에서 누르면 첫 host client로 가는 대체 규칙이 그 host에 popup을 열고 같은 workspace에 inner client를 하나 더 붙였다 (리뷰 실측, 3.4·3.7b). 기록 없는 popup은 기록을 넣기 전의 `attach.sh`가 연 것뿐이고, 다음 열기부터 기록이 생긴다.
+  - 기록이 없으면 아무것도 하지 않는다. 크기 키는 greenroom server의 모든 client에 걸리므로, greenroom server에 직접 attach한 client에서 누르면 첫 host client로 가는 대체 규칙이 그 host에 popup을 열고 같은 workspace에 inner client를 하나 더 붙였다 (리뷰 실측, 3.4·3.7b). 기록 없는 popup은 기록을 넣기 전의 `attach.sh`가 연 것뿐이고, 다음 열기부터 기록이 생긴다.
   - 기각안: 최근 활성 host client. popup이 떠 있는 동안 host의 `client_activity`가 바뀌지 않아 client가 둘이면 틀린다 (실측 29). session 환경(`update-environment`)은 session마다 마지막 attach 값이라 틀리고, `/proc/<pid>/environ`은 Linux 전용이다.
-- 동시 실행: re-open 중에 친 키는 새 inner client에 한꺼번에 도착한다. 크기 키 둘이 같이 돌면 같은 상태를 읽어 한 단계가 사라져서 (실측 33), `size.sh`는 agent server의 `wait-for -L greenroom_size`로 차례를 지킨다.
-- 키: `@greenroom-large-key`(기본 `z`, zoom), `@greenroom-grow-key`, `@greenroom-shrink-key`, `@greenroom-reset-key`(기본 없음 = 바인딩 안 함). popup 안 prefix table에 묶고 `@greenroom_bound`로 관리한다. `z`는 tmux의 pane zoom 키를 대신하므로 `@greenroom-large-key`를 빈 값으로 두면 바인딩하지 않는다. 실행 중인 agent server에서 빈 값이나 다른 키로 바꾸면 다음 열기에서 `z`를 tmux zoom으로 되돌린다 (D3).
+- 동시 실행: re-open 중에 친 키는 새 inner client에 한꺼번에 도착한다. 크기 키 둘이 같이 돌면 같은 상태를 읽어 한 단계가 사라져서 (실측 33), `size.sh`는 greenroom server의 `wait-for -L greenroom_size`로 차례를 지킨다.
+- 키: `@greenroom-large-key`(기본 `z`, zoom), `@greenroom-grow-key`, `@greenroom-shrink-key`, `@greenroom-reset-key`(기본 없음 = 바인딩 안 함). popup 안 prefix table에 묶고 `@greenroom_bound`로 관리한다. `z`는 tmux의 pane zoom 키를 대신하므로 `@greenroom-large-key`를 빈 값으로 두면 바인딩하지 않는다. 실행 중인 greenroom server에서 빈 값이나 다른 키로 바꾸면 다음 열기에서 `z`를 tmux zoom으로 되돌린다 (D3).
 - 진입점은 `size.sh <action> <client_pid> <workspace>` 하나다. 다른 UI(메뉴 등)도 같은 명령을 부른다.
 
 ## 동작 흐름
@@ -189,9 +190,9 @@
 2. host가 `run-shell -b`로 `open.sh`를 실행하고, `open.sh`가 현재 크기로 `display-popup -c <client> -E -d <origin 경로>`를 열어 `attach.sh`를 실행한다 (D11).
 3. `attach.sh`가 대상 workspace를 정한다. 순서: 인자, `@greenroom_last`, `@greenroom-workspace`(기본 `main`) 중 존재하는 것, 아무 workspace, 없으면 `@greenroom-workspace`를 새로 만든다.
 4. 준비 명령을 tmux 호출 하나로 보낸다.
-   - agent server가 없으면 이때 뜨고, host의 동작 옵션(`default-terminal`, `mouse`, `base-index`, `extended-keys` 등)을 한 번 복사한다.
+   - greenroom server가 없으면 이때 뜨고, host의 동작 옵션(`default-terminal`, `mouse`, `base-index`, `extended-keys` 등)을 한 번 복사한다.
    - 사용자 옵션 복사 (D7), 상태 옵션 기록, 옛 바인딩 해제와 새 바인딩 (D3).
-   - workspace가 없으면 `@greenroom-default` agent 하나로 만든다.
+   - workspace가 없으면 `@greenroom-default` profile의 window 하나로 만든다.
    - workspace에 `@greenroom_origin`으로 origin 경로를 기록한다.
 5. `exec tmux -L <socket> attach -t =<workspace>`.
 6. 준비가 실패하고 workspace도 없으면 에러를 출력하고 키 입력을 기다린다. `-E` popup이 에러를 보여 주기 전에 닫히지 않게 한다.
@@ -199,7 +200,7 @@
 ### popup 닫기
 
 - popup 안에서 `prefix + g`(열기와 같은 키) 또는 `prefix + d`를 누른다.
-- inner client가 detach되면 attach 프로세스가 끝나고 `-E` popup이 닫힌다. agent는 계속 실행된다.
+- inner client가 detach되면 attach 프로세스가 끝나고 `-E` popup이 닫힌다. window는 계속 실행된다.
 
 ### popup 크기 바꾸기
 
@@ -208,25 +209,25 @@
 3. 새 상태를 쓰는 명령과 `run-shell -b open.sh ... --reopen <workspace>`를 host 호출 하나로 보내고 끝난다.
 4. host의 `open.sh`가 `display-popup -C` 뒤에 새 크기의 `display-popup`을 한 명령 목록으로 연다. 새 popup의 `attach.sh --reopen`은 host client를 기록하고 바로 attach한다.
 
-### agent 추가
+### window 추가
 
-- popup 안에서 `prefix + c`를 누르면 agent 메뉴가 뜬다. 항목은 `@greenroom-agents` 순서 그대로다. 기본값 `claude codex gemini opencode | shell`은 agent 넷, 구분선, `shell` 순이다.
-- 단축키는 `@greenroom-<name>-key`가 있으면 그 키, 없으면 이름에서 아직 안 쓴 첫 소문자·숫자다. 자동 단축키는 `display-menu`가 쓰는 `q j k g G`를 건너뛴다.
-- 목록이 비면 비활성 항목 `no agents configured` 하나만 보인다.
-- 고른 agent를 `@greenroom_origin` 경로에서 새 window로 실행한다. window 이름은 agent 이름이다.
+- popup 안에서 `prefix + c`를 누르면 profile 메뉴가 뜬다. 항목은 `@greenroom-profiles` 순서 그대로다. 기본값 `claude codex gemini opencode | shell`은 agent CLI 넷, 구분선, `shell` 순이다.
+- 단축키는 `@greenroom-profile-<name>-key`가 있으면 그 키, 없으면 이름에서 아직 안 쓴 첫 소문자·숫자다. 자동 단축키는 `display-menu`가 쓰는 `q j k g G`를 건너뛴다.
+- 목록이 비면 비활성 항목 `no profiles configured` 하나만 보인다.
+- 고른 profile을 `@greenroom_origin` 경로에서 새 window로 실행한다. window 이름은 profile 이름이다.
 
-### agent 종료
+### window 종료
 
-- agent가 status 0으로 끝나면 window가 닫힌다. 그 밖의 status는 D8대로 키 하나를 기다린 뒤 닫힌다.
-- workspace의 마지막 agent가 끝나면 session이 사라지고, `detach-on-destroy on`이라 popup이 닫힌다. 다른 workspace로 넘어가지 않는다 (테스트 `last_agent_exit_does_not_switch_workspace`).
-- 마지막 workspace가 사라지면 agent server도 종료된다 (`exit-empty` 기본값).
+- window의 명령이 status 0으로 끝나면 window가 닫힌다. 그 밖의 status는 D8대로 키 하나를 기다린 뒤 닫힌다.
+- workspace의 마지막 window가 끝나면 session이 사라지고, `detach-on-destroy on`이라 popup이 닫힌다. 다른 workspace로 넘어가지 않는다 (테스트 `last_window_exit_does_not_switch_workspace`).
+- 마지막 workspace가 사라지면 greenroom server도 종료된다 (`exit-empty` 기본값).
 
 ### workspace 관리
 
 - host에서 `prefix + G`를 누르면 popup이 열리고 workspace 메뉴가 뜬다. popup 안에서 `prefix + G`도 같은 메뉴다.
 - 메뉴 항목
-  - 기존 workspace 목록. agent 수와 현재 표시(`*`), 앞 9개는 숫자 단축키. 고르면 `switch-client`.
-  - `n` 새 workspace: 이름을 묻고, 현재 workspace의 origin 경로에서 기본 agent 하나로 만든 뒤 전환.
+  - 기존 workspace 목록. window 수와 현재 표시(`*`), 앞 9개는 숫자 단축키. 고르면 `switch-client`.
+  - `n` 새 workspace: 이름을 묻고, 현재 workspace의 origin 경로에서 기본 profile의 window 하나로 만든 뒤 전환.
   - `r` 이름 변경, `x` 현재 workspace 삭제(확인 후).
 - workspace 이름에서 `[A-Za-z0-9_-]` 밖의 문자는 `_`로 바꾼다.
 - 마지막으로 본 workspace는 `client-attached`, `client-session-changed`, `session-renamed` hook이 `set-option -gF`로 `@greenroom_last`에 기록한다. `-F`가 없으면 `#{session_name}`이 글자 그대로 저장된다 (리뷰 실측).
@@ -235,62 +236,63 @@
 
 host server:
 
-| 키             | 동작                            |
-| -------------- | ------------------------------- |
-| `prefix` + `g` | 마지막 workspace를 popup으로    |
-| `prefix` + `G` | popup + workspace 메뉴          |
-| `prefix` + `S` | pane 화면을 agent로 보내기      |
-| copy-mode `a`  | 선택 영역을 agent로 보내기      |
+| 키             | 동작                         |
+| -------------- | ---------------------------- |
+| `prefix` + `g` | 마지막 workspace를 popup으로 |
+| `prefix` + `G` | popup + workspace 메뉴       |
+| `prefix` + `S` | pane 화면을 popup으로 보내기 |
+| copy-mode `a`  | 선택 영역을 popup으로 보내기 |
 
-popup 안 (agent server):
+popup 안 (greenroom server):
 
-| 키                         | 동작                             |
-| -------------------------- | -------------------------------- |
-| `prefix` + `g`             | popup 닫기                       |
-| `prefix` + `c`             | agent 메뉴                       |
-| `prefix` + `G`             | workspace 메뉴                   |
-| `prefix` + `z`             | large 모드 토글                  |
-| `prefix` + `n` `p` `0`-`9` | agent 전환 (tmux 기본)           |
-| `prefix` + `s` `w`         | workspace·agent 트리 (tmux 기본) |
-| `prefix` + `d`             | popup 닫기 (tmux 기본)           |
+| 키                         | 동작                              |
+| -------------------------- | --------------------------------- |
+| `prefix` + `g`             | popup 닫기                        |
+| `prefix` + `c`             | profile 메뉴                      |
+| `prefix` + `G`             | workspace 메뉴                    |
+| `prefix` + `z`             | large 모드 토글                   |
+| `prefix` + `n` `p` `0`-`9` | window 전환 (tmux 기본)           |
+| `prefix` + `s` `w`         | workspace·window 트리 (tmux 기본) |
+| `prefix` + `d`             | popup 닫기 (tmux 기본)            |
 
 - `g`/`G`는 stock tmux와 현재 사용자 conf 양쪽에서 비어 있는 키다 (`list-keys -T prefix`로 확인). 옵션으로 바꾼다.
-- `@greenroom-root-key`(예: `M-g`)를 지정하면 prefix 없이 토글한다. 이 키는 agent server에도 바인딩되므로 agent CLI에는 전달되지 않는다.
+- `@greenroom-root-key`(예: `M-g`)를 지정하면 prefix 없이 토글한다. 이 키는 greenroom server에도 바인딩되므로 window의 프로그램에는 전달되지 않는다.
 
 ## 옵션
 
-| 옵션                        | 기본값                                  | 설명                                    |
-| --------------------------- | --------------------------------------- | --------------------------------------- |
-| `@greenroom-key`            | `g`                                     | popup 토글 키 (prefix table)            |
-| `@greenroom-root-key`       | 없음                                    | prefix 없이 토글하는 키 (root table)    |
-| `@greenroom-workspaces-key` | `G`                                     | workspace 메뉴 키 (host, popup 안 공통) |
-| `@greenroom-agents-key`     | `c`                                     | popup 안 agent 메뉴 키                  |
-| `@greenroom-send-key`       | `a`                                     | 선택 영역 보내기 키 (copy-mode)         |
-| `@greenroom-send-pane-key`  | `S`                                     | pane 화면 보내기 키 (prefix table)      |
-| `@greenroom-large-key`      | `z`                                     | popup 안 large 모드 토글 키             |
-| `@greenroom-grow-key`       | 없음                                    | popup 안 크기 키우기 키                 |
-| `@greenroom-shrink-key`     | 없음                                    | popup 안 크기 줄이기 키                 |
-| `@greenroom-reset-key`      | 없음                                    | popup 안 크기 되돌리기 키               |
-| `@greenroom-agents`         | `claude codex gemini opencode \| shell` | agent 메뉴 항목과 순서                  |
-| `@greenroom-<name>-cmd`     | `<name>`                                | agent 실행 명령                         |
-| `@greenroom-<name>-key`     | 자동                                    | agent 메뉴 단축키                       |
-| `@greenroom-shell-cmd`      | login shell                             | 메뉴의 `shell` 항목이 실행할 명령       |
-| `@greenroom-default`        | `claude`                                | 새 workspace의 첫 agent                 |
-| `@greenroom-workspace`      | `main`                                  | 기본 workspace 이름                     |
-| `@greenroom-width`          | `80%`                                   | popup 너비                              |
-| `@greenroom-height`         | `80%`                                   | popup 높이                              |
-| `@greenroom-large-width`    | `95%`                                   | large 모드 popup 너비                   |
-| `@greenroom-large-height`   | `95%`                                   | large 모드 popup 높이                   |
-| `@greenroom-resize-step`    | `10`                                    | 키우기·줄이기 한 번에 바뀌는 %p         |
-| `@greenroom-x`              | `C`                                     | popup 가로 위치                         |
-| `@greenroom-y`              | `C`                                     | popup 세로 위치                         |
-| `@greenroom-border-lines`   | `rounded`                               | popup 테두리 (`popup-border-lines` 값)  |
-| `@greenroom-socket`         | `greenroom`                             | agent server socket 이름 (`-L`)         |
-| `@greenroom-config`         | 없음                                    | agent server 시작 시 추가로 읽을 conf   |
+| 옵션                            | 기본값                                  | 설명                                      |
+| ------------------------------- | --------------------------------------- | ----------------------------------------- |
+| `@greenroom-key`                | `g`                                     | popup 토글 키 (prefix table)              |
+| `@greenroom-root-key`           | 없음                                    | prefix 없이 토글하는 키 (root table)      |
+| `@greenroom-workspaces-key`     | `G`                                     | workspace 메뉴 키 (host, popup 안 공통)   |
+| `@greenroom-profiles-key`       | `c`                                     | popup 안 profile 메뉴 키                  |
+| `@greenroom-send-key`           | `a`                                     | 선택 영역 보내기 키 (copy-mode)           |
+| `@greenroom-send-pane-key`      | `S`                                     | pane 화면 보내기 키 (prefix table)        |
+| `@greenroom-large-key`          | `z`                                     | popup 안 large 모드 토글 키               |
+| `@greenroom-grow-key`           | 없음                                    | popup 안 크기 키우기 키                   |
+| `@greenroom-shrink-key`         | 없음                                    | popup 안 크기 줄이기 키                   |
+| `@greenroom-reset-key`          | 없음                                    | popup 안 크기 되돌리기 키                 |
+| `@greenroom-profiles`           | `claude codex gemini opencode \| shell` | profile 메뉴 항목과 순서                  |
+| `@greenroom-profile-<name>-cmd` | `<name>`                                | profile 실행 명령                         |
+| `@greenroom-profile-<name>-key` | 자동                                    | profile 메뉴 단축키                       |
+| `@greenroom-profile-shell-cmd`  | login shell                             | 메뉴의 `shell` 항목이 실행할 명령         |
+| `@greenroom-default`            | `claude`                                | 새 workspace의 첫 window profile          |
+| `@greenroom-workspace`          | `main`                                  | 기본 workspace 이름                       |
+| `@greenroom-width`              | `80%`                                   | popup 너비                                |
+| `@greenroom-height`             | `80%`                                   | popup 높이                                |
+| `@greenroom-large-width`        | `95%`                                   | large 모드 popup 너비                     |
+| `@greenroom-large-height`       | `95%`                                   | large 모드 popup 높이                     |
+| `@greenroom-resize-step`        | `10`                                    | 키우기·줄이기 한 번에 바뀌는 %p           |
+| `@greenroom-x`                  | `C`                                     | popup 가로 위치                           |
+| `@greenroom-y`                  | `C`                                     | popup 세로 위치                           |
+| `@greenroom-border-lines`       | `rounded`                               | popup 테두리 (`popup-border-lines` 값)    |
+| `@greenroom-socket`             | `greenroom`                             | greenroom server socket 이름 (`-L`)       |
+| `@greenroom-config`             | 없음                                    | greenroom server 시작 시 추가로 읽을 conf |
 
-- 메뉴 키 옵션 이름은 `@greenroom-<메뉴>-key` 형식이다. 처음 이름 `@greenroom-new-key`, `@greenroom-menu-key`는 2026-10-01에 지금 이름으로 바꿨고 호환 별칭은 두지 않았다.
+- 메뉴 키 옵션 이름은 `@greenroom-<메뉴>-key` 형식이다. 처음 이름 `@greenroom-new-key`, `@greenroom-menu-key`는 2026-10-01에 `@greenroom-agents-key`, `@greenroom-workspaces-key`로 바꿨고 호환 별칭은 두지 않았다.
+- 2026-10-02에 메뉴 항목을 agent에서 profile로, 전용 server를 agent server에서 greenroom server로 바꿨다 (`@greenroom-agents`·`-agents-key`·`-<name>-cmd`·`-<name>-key` → `@greenroom-profiles`·`-profiles-key`·`-profile-<name>-cmd`·`-profile-<name>-key`). 접두어를 따로 두어 profile 이름이 플러그인 키 옵션과 구조적으로 겹치지 않으므로 이름 목록 우회를 지웠다. 호환 별칭은 없다.
 - host 키(`@greenroom-key`, `-root-key`, `-workspaces-key`)는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.
-- 나머지는 여는 때마다 읽는다. popup 크기·위치·테두리는 `open.sh`가 읽는다 (D11). agent server 쪽 키 바인딩도 여는 때마다 다시 만든다.
+- 나머지는 여는 때마다 읽는다. popup 크기·위치·테두리는 `open.sh`가 읽는다 (D11). greenroom server 쪽 키 바인딩도 여는 때마다 다시 만든다.
 - 크기 키 옵션은 빈 값이면 바인딩하지 않는다. 기본값이 있는 것은 `@greenroom-large-key`(`z`)뿐이다.
 - 크기 상태 `@greenroom_size_width`, `@greenroom_size_height`, `@greenroom_size_large`는 host server의 플러그인 상태다 (D11).
 
@@ -298,18 +300,18 @@ popup 안 (agent server):
 
 ```
 greenroom.tmux              TPM entry: bind host keys
-conf/agent-server.conf      agent server defaults: marker, status line, hooks
+conf/greenroom-server.conf  greenroom server defaults: marker, status line, hooks
 scripts/helpers.sh          option lookup, quoting, raw option reads
 scripts/open.sh             open the host popup at the current size (host)
 scripts/attach.sh           popup job: pick and prepare a workspace, attach
-scripts/size.sh             popup size keys: store the size, re-open (agent server)
-scripts/run-agent.sh        agent wrapper run by every agent window
-scripts/workspace-menu.sh   workspace menu (agent server)
+scripts/size.sh             popup size keys: store the size, re-open (greenroom server)
+scripts/run-profile.sh      profile wrapper run by every window
+scripts/workspace-menu.sh   workspace menu (greenroom server)
 scripts/new-workspace.sh    create a workspace from the menu prompt
 scripts/rename-workspace.sh rename a workspace from the menu prompt
-scripts/alert.sh            bell alerts to the host (agent server hooks)
+scripts/alert.sh            bell alerts to the host (greenroom server hooks)
 scripts/send.sh             send a selection or a pane screen (host)
-scripts/paste.sh            paste sent text after attach (agent server)
+scripts/paste.sh            paste sent text after attach (greenroom server)
 tests/run.sh                integration tests on isolated tmux servers
 ```
 
@@ -317,39 +319,39 @@ tests/run.sh                integration tests on isolated tmux servers
 
 ### 설계 전 프로토타입
 
-tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. harness pane 안에서 host client를 돌리고 harness의 `send-keys`로 키를 입력했다.
+tmux 3.7b에서 격리된 server 세 개(harness, host, greenroom)로 실측했다. harness pane 안에서 host client를 돌리고 harness의 `send-keys`로 키를 입력했다.
 
-| #   | 확인 항목                                           | 결과 (실측)                               |
-| --- | --------------------------------------------------- | ----------------------------------------- |
-| 1   | popup 안 `prefix + c`는 어느 server가 받나          | agent server. window 1→2, host 변화 없음  |
-| 2   | popup이 열린 동안 host `bind -n` 키가 발동하나      | 발동 안 함                                |
-| 3   | popup이 열린 동안 host prefix 바인딩이 발동하나     | 발동 안 함                                |
-| 4   | agent server에서 `detach-client`하면 popup이 닫히나 | 닫힘. session과 window는 유지             |
-| 5   | 다시 열면 상태가 유지되나                           | 유지. window 2개 그대로                   |
-| 6   | `$TMUX`를 지우지 않고 popup 안에서 attach 되나      | 됨. nested 검사에 걸리지 않음             |
-| 7   | workspace의 마지막 window가 끝나면                  | popup 닫힘, agent server 종료             |
-| 8   | Shift+Enter가 중첩 계층을 통과하나                  | 통과. 직접, 중첩 모두 `ESC[27;2;13~`      |
+| #   | 확인 항목                                               | 결과 (실측)                                  |
+| --- | ------------------------------------------------------- | -------------------------------------------- |
+| 1   | popup 안 `prefix + c`는 어느 server가 받나              | greenroom server. window 1→2, host 변화 없음 |
+| 2   | popup이 열린 동안 host `bind -n` 키가 발동하나          | 발동 안 함                                   |
+| 3   | popup이 열린 동안 host prefix 바인딩이 발동하나         | 발동 안 함                                   |
+| 4   | greenroom server에서 `detach-client`하면 popup이 닫히나 | 닫힘. session과 window는 유지                |
+| 5   | 다시 열면 상태가 유지되나                               | 유지. window 2개 그대로                      |
+| 6   | `$TMUX`를 지우지 않고 popup 안에서 attach 되나          | 됨. nested 검사에 걸리지 않음                |
+| 7   | workspace의 마지막 window가 끝나면                      | popup 닫힘, greenroom server 종료            |
+| 8   | Shift+Enter가 중첩 계층을 통과하나                      | 통과. 직접, 중첩 모두 `ESC[27;2;13~`         |
 
 - 6번은 같은 server의 session으로 확인했다. 근거 (조사): tmux 3.3 `server_client_check_nested`는 client tty가 그 server의 pane tty일 때만 nested로 본다. popup job은 자체 pty를 쓴다.
 - 7번은 session이 하나뿐이라 server가 끝나서 닫힌 경우다. workspace가 여럿일 때는 통합 테스트가 따로 확인한다.
-- 8번 조건: host와 agent server 모두 `extended-keys on`, `terminal-features`에 `tmux*:extkeys`. tmux 3.4에서는 같은 키가 `ESC[13;2u`(CSI u)로 도착한다 (리뷰 실측, 통합 테스트로 재확인). 3.3 내장 terminal feature에는 `tmux`용 extkeys가 없어 agent server conf가 직접 추가한다 (리뷰 조사).
+- 8번 조건: host와 greenroom server 모두 `extended-keys on`, `terminal-features`에 `tmux*:extkeys`. tmux 3.4에서는 같은 키가 `ESC[13;2u`(CSI u)로 도착한다 (리뷰 실측, 통합 테스트로 재확인). 3.3 내장 terminal feature에는 `tmux`용 extkeys가 없어 greenroom server conf가 직접 추가한다 (리뷰 조사).
 
 ### 구현 중 실측
 
-| #   | 확인 항목                                        | 결과 (실측, 3.7b)                                |
-| --- | ------------------------------------------------ | ------------------------------------------------ |
-| 9   | `display-popup` shell-command의 format 확장      | 안 함. `#{session_name}`이 글자 그대로 남음      |
-| 10  | `-f`를 두 번 주면                                | 둘 다 읽음. 둘째 파일의 에러 뒤 줄과 명령도 실행 |
-| 11  | tmux parser가 `'it'\''s'`와 중첩 quoting을 받나  | 받음. `$` `;` `#` `"` 백슬래시 모두 보존         |
-| 12  | `$`가 든 옵션 값을 `show -gv`로 읽으면           | 3.7b 원문, 3.4는 `\$`. buffer 경유는 둘 다 원문  |
-| 13  | pane 대상 인자에 `-t =main`                      | `no such session`. `=main:`이어야 함             |
-| 14  | `;`로 끝나는 argv 원소                           | 명령 구분자로 먹힘. 끝을 `\;`로 쓰면 값 보존     |
-| 15  | `set-buffer "~/x"`처럼 따옴표 첫 글자가 `~`      | tilde 확장됨 (코드 리뷰 실측). 앞에 `x`를 붙임   |
-| 16  | `list-keys -T prefix g` (키 인자)                | 3.7b는 출력 없음, 3.4는 출력. 테스트는 전체 검색 |
-| 17  | bell flag가 서는 때와 지워지는 때                | 안 보는 window에만 섬. attach·선택하면 지워짐    |
-| 18  | `bell-action other`에서 닫힌 popup의 현재 window | flag는 서지만 `alert-bell` hook이 돌지 않음      |
-| 19  | popup 안에서 복사 (host `set-clipboard on`)      | OSC 52로 바깥 터미널까지 감. host buffer도 생김  |
-| 20  | agent server `copy-command`로 host에 load-buffer | copy-mode 복사가 host paste buffer에 들어감      |
+| #   | 확인 항목                                            | 결과 (실측, 3.7b)                                |
+| --- | ---------------------------------------------------- | ------------------------------------------------ |
+| 9   | `display-popup` shell-command의 format 확장          | 안 함. `#{session_name}`이 글자 그대로 남음      |
+| 10  | `-f`를 두 번 주면                                    | 둘 다 읽음. 둘째 파일의 에러 뒤 줄과 명령도 실행 |
+| 11  | tmux parser가 `'it'\''s'`와 중첩 quoting을 받나      | 받음. `$` `;` `#` `"` 백슬래시 모두 보존         |
+| 12  | `$`가 든 옵션 값을 `show -gv`로 읽으면               | 3.7b 원문, 3.4는 `\$`. buffer 경유는 둘 다 원문  |
+| 13  | pane 대상 인자에 `-t =main`                          | `no such session`. `=main:`이어야 함             |
+| 14  | `;`로 끝나는 argv 원소                               | 명령 구분자로 먹힘. 끝을 `\;`로 쓰면 값 보존     |
+| 15  | `set-buffer "~/x"`처럼 따옴표 첫 글자가 `~`          | tilde 확장됨 (코드 리뷰 실측). 앞에 `x`를 붙임   |
+| 16  | `list-keys -T prefix g` (키 인자)                    | 3.7b는 출력 없음, 3.4는 출력. 테스트는 전체 검색 |
+| 17  | bell flag가 서는 때와 지워지는 때                    | 안 보는 window에만 섬. attach·선택하면 지워짐    |
+| 18  | `bell-action other`에서 닫힌 popup의 현재 window     | flag는 서지만 `alert-bell` hook이 돌지 않음      |
+| 19  | popup 안에서 복사 (host `set-clipboard on`)          | OSC 52로 바깥 터미널까지 감. host buffer도 생김  |
+| 20  | greenroom server `copy-command`로 host에 load-buffer | copy-mode 복사가 host paste buffer에 들어감      |
 
 - 12번의 3.4 결과는 `/usr/bin/tmux` 3.4로 측정했다. `show-options -g` 출력도 3.4에서는 `\\$`로 이중 escape되어 source로 되살릴 수 없다.
 
@@ -383,37 +385,37 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 
 ### 코드 리뷰에서 고친 것
 
-- bash 4.2 이하는 `"${1//\'/...}"`의 치환 문자열에서 quote를 제거하지 않는다. `quote()`가 중첩 quoting에서 깨져 agent 메뉴와 새 workspace가 동작하지 않았다 (리뷰 실측, `BASH_COMPAT=3.2`로 11/16). 치환 문자열을 변수에 담아 고쳤다.
+- bash 4.2 이하는 `"${1//\'/...}"`의 치환 문자열에서 quote를 제거하지 않는다. `quote()`가 중첩 quoting에서 깨져 profile 메뉴와 새 workspace가 동작하지 않았다 (리뷰 실측, `BASH_COMPAT=3.2`로 11/16). 치환 문자열을 변수에 담아 고쳤다.
 - `new-session -c`는 경로를 format으로 확장한다. `#S`가 든 디렉토리는 엉뚱한 곳에서 시작했고, tmux 3.4에서는 `#(...)`가 든 디렉토리 이름이 명령을 실행했다 (리뷰 실측). 시작 디렉토리는 `format_escape`를 거친다.
 - 새 workspace의 origin과 입력 이름을 `display-message`, `show-option`으로 읽어 3.4에서 `$`가 깨졌다. `read_raw_options`로 바꿨다.
 - workspace 메뉴의 전환·삭제 대상은 이름 대신 session ID를 쓴다. 이름 변경도 입력값을 정리하는 스크립트를 거친다.
-- 실행 중인 agent server에서 `@greenroom-large-key`를 빈 값이나 `Z`로 바꾸면 `prefix + z`가 zoom도 large 모드도 아닌 빈 키로 남았다 (리뷰 실측, 3.4·3.7b). D3대로 tmux 바인딩을 되돌린다.
+- 실행 중인 greenroom server에서 `@greenroom-large-key`를 빈 값이나 `Z`로 바꾸면 `prefix + z`가 zoom도 large 모드도 아닌 빈 키로 남았다 (리뷰 실측, 3.4·3.7b). D3대로 tmux 바인딩을 되돌린다.
 
 ### 통합 테스트
 
-`tests/run.sh` 28개가 tmux 3.7b와 3.4에서, 각각 bash 5.2와 `BASH_COMPAT=3.2`로 모두 통과한다 (실측, 네 조합). origin 경로는 `it's #S $x;`처럼 셸 quoting, tmux format, argv 파싱을 깨는 문자를 담는다. 실제 bash 3.2 바이너리는 설치본이 없어 돌리지 못했다.
+`tests/run.sh`의 테스트가 tmux 3.7b와 3.4에서, 각각 bash 5.2와 `BASH_COMPAT=3.2`로 모두 통과한다 (실측, 네 조합). origin 경로는 `it's #S $x;`처럼 셸 quoting, tmux format, argv 파싱을 깨는 문자를 담는다. 실제 bash 3.2 바이너리는 설치본이 없어 돌리지 못했다.
 
 ## 선행 사례
 
 - omerxx/tmux-floax: host server의 `scratch` session을 popup에 띄우는 범용 scratch 터미널. session 이름으로 popup 안인지 판별해 detach한다.
 - loichyan/tmux-toggle-popup: 전용 server(`@popup-socket-name`)를 쓰는 범용 popup 토글. README 기준 tmux 3.4+.
 - craftzdog/tmux-claude-hatch: host server에 프로젝트별 `claude-<hash>` session. Claude 전용.
-- 이 플러그인의 차이: agent 레지스트리와 메뉴, workspace와 agent의 2단 구조, origin 경로 전달. 범용 popup 플러그인 위에 얹으면 의존성만 늘고, 필요한 부분은 여전히 직접 짜야 한다.
+- 이 플러그인의 차이: profile 레지스트리와 메뉴, workspace와 window의 2단 구조, origin 경로 전달. 범용 popup 플러그인 위에 얹으면 의존성만 늘고, 필요한 부분은 여전히 직접 짜야 한다.
 
 ## 위험과 알려진 제약
 
 - tmux 3.8(미출시)은 popup을 modal floating pane으로 다시 구현한다 (tmux master 소스 조사, 미실측). 출시되면 통합 테스트를 다시 돌린다.
 - 크기가 다른 두 client가 같은 workspace를 보면 window가 마지막으로 입력한 client 크기로 오간다 (`window-size latest`, 리뷰 실측). 문서화만 했다.
-- agent server의 `prefix`는 전역 하나, origin 경로는 workspace당 하나다. 설정이 다른 host 둘이 같은 agent server를 쓰면 마지막에 연 host 값이 이긴다.
-- agent server의 환경 변수는 처음 띄운 popup job의 환경으로 고정된다. pane 안에서 바꾼 PATH(nvm, direnv 등)는 agent에 닿지 않는다. login shell 실행(D8)이 profile의 PATH까지는 채운다.
-- `conf/agent-server.conf`는 agent server 시작 때만 읽는다. 플러그인을 업그레이드하면 agent server를 재시작해야 conf 변경이 반영된다.
-- `@greenroom-<name>-cmd`는 셸로 실행된다. 사용자 conf 값이라 신뢰 경계 안이다.
-- bell 알림은 마지막으로 popup을 연 host server로만 간다. popup이 닫힌 채 agent server가 끝나면 host의 `@greenroom_alert`가 남는다. 다음에 popup을 열 때 지운다.
-- 새 workspace로 보내는 텍스트는 화면이 잠잠해지는 것을 보고 붙여넣는 추정 방식이다. agent가 화면을 다 그린 뒤에도 입력을 늦게 받기 시작하면 앞부분이 빠질 수 있다.
-- 크기 키는 `@greenroom_host`(마지막으로 연 host server)로 간다. host 둘이 같은 agent server를 쓰면 다른 host의 popup에서는 크기 키가 아무것도 하지 않는다.
+- greenroom server의 `prefix`는 전역 하나, origin 경로는 workspace당 하나다. 설정이 다른 host 둘이 같은 greenroom server를 쓰면 마지막에 연 host 값이 이긴다.
+- greenroom server의 환경 변수는 처음 띄운 popup job의 환경으로 고정된다. pane 안에서 바꾼 PATH(nvm, direnv 등)는 새 window에 닿지 않는다. login shell 실행(D8)이 셸 설정 파일의 PATH까지는 채운다.
+- `conf/greenroom-server.conf`는 greenroom server 시작 때만 읽는다. 플러그인을 업그레이드하면 greenroom server를 재시작해야 conf 변경이 반영된다.
+- `@greenroom-profile-<name>-cmd`는 셸로 실행된다. 사용자 conf 값이라 신뢰 경계 안이다.
+- bell 알림은 마지막으로 popup을 연 host server로만 간다. popup이 닫힌 채 greenroom server가 끝나면 host의 `@greenroom_alert`가 남는다. 다음에 popup을 열 때 지운다.
+- 새 workspace로 보내는 텍스트는 화면이 잠잠해지는 것을 보고 붙여넣는 추정 방식이다. 첫 window의 프로그램이 화면을 다 그린 뒤에도 입력을 늦게 받기 시작하면 앞부분이 빠질 수 있다.
+- 크기 키는 `@greenroom_host`(마지막으로 연 host server)로 간다. host 둘이 같은 greenroom server를 쓰면 다른 host의 popup에서는 크기 키가 아무것도 하지 않는다.
 - 크기 상태는 host server에 하나다. client마다 따로 두지 않고, 다른 client의 popup은 다음에 열 때 반영된다.
-- agent server에 직접 attach한 client에서는 크기 키가 아무것도 하지 않는다. 그 client에서 `prefix + z`는 zoom도 아니다.
-- 플러그인이 쓰다가 놓은 agent server 키 중 `c`, `z`, `-`, `=` 밖의 키는 agent server를 재시작할 때까지 바인딩이 없다 (D3).
+- greenroom server에 직접 attach한 client에서는 크기 키가 아무것도 하지 않는다. 그 client에서 `prefix + z`는 zoom도 아니다.
+- 플러그인이 쓰다가 놓은 greenroom server 키 중 `c`, `z`, `-`, `=` 밖의 키는 greenroom server를 재시작할 때까지 바인딩이 없다 (D3).
 - 크기 키를 re-open보다 빨리(0.1초 간격) 누르면 단계가 빠질 수 있다 (실측 33 아래). 두 re-open의 `open.sh`가 거의 같이 돌아 `display-popup` 순서가 뒤집히면 popup이 바로 전 크기로 남을 수 있다 (미실측, 다음 크기 키나 열기에서 바로잡힌다).
 - 테스트는 항상 고유한 `-L` socket을 쓰고, 기본 server와 실제 `greenroom` socket에는 접근하지 않는다.
 
@@ -421,32 +423,32 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, agent)로 실측했다. 
 
 ### M1. 단일 workspace (완료)
 
-- 토글 열기·닫기, 기본 agent 자동 실행, agent 메뉴, 상태줄, 옵션.
-- 테스트: 열기, 닫은 뒤 agent 생존, 다시 열 때 상태 유지, agent 추가, 셸 문법이 든 명령, 옵션 변경 반영, 키 변경, 없는 명령·실패한 agent, 마지막 agent 종료, Shift+Enter, agent server 안의 플러그인 무동작.
+- 토글 열기·닫기, 기본 profile 자동 실행, profile 메뉴, 상태줄, 옵션.
+- 테스트: 열기, 닫은 뒤 window 생존, 다시 열 때 상태 유지, window 추가, 셸 문법이 든 명령, 옵션 변경 반영, 키 변경, 없는 명령·실패한 명령, 마지막 window 종료, Shift+Enter, greenroom server 안의 플러그인 무동작.
 
 ### M2. 여러 workspace (완료)
 
 - workspace 메뉴(목록·생성·이름 변경·삭제), `@greenroom_last` hook, 이름 정리.
-- 테스트: 생성과 전환, 토글이 마지막 workspace를 여는지, host 메뉴 키, 다른 workspace가 있을 때 마지막 agent 종료.
+- 테스트: 생성과 전환, 토글이 마지막 workspace를 여는지, host 메뉴 키, 다른 workspace가 있을 때 마지막 window 종료.
 
 ### P1. bell 알림 (완료)
 
-- D9대로 구현. agent CLI 설정은 추가하지 않는다. agent server에는 `bell-action any`만 강제한다.
-- 테스트: 닫힌 popup의 bell이 host 옵션과 메시지로 가고 popup을 열면 지워지는지, 보고 있는 agent의 bell은 알리지 않는지, README의 status line 구간이 알림이 있을 때만 그려지는지.
+- D9대로 구현. agent CLI 설정은 추가하지 않는다. greenroom server에는 `bell-action any`만 강제한다.
+- 테스트: 닫힌 popup의 bell이 host 옵션과 메시지로 가고 popup을 열면 지워지는지, 보고 있는 window의 bell은 알리지 않는지, README의 status line 구간이 알림이 있을 때만 그려지는지.
 
-### P2. host 내용을 agent로 보내기 (완료)
+### P2. host 내용을 popup으로 보내기 (완료)
 
 - D10대로 구현. copy-mode `a`는 선택 영역, `prefix + S`는 pane에 보이는 화면을 보낸다.
-- 테스트: 이미 떠 있는 agent로 선택 영역 보내기, agent server가 없을 때 pane 화면 보내기(새 workspace 대기 경로), 둘 다 host buffer를 남기지 않는지.
+- 테스트: 이미 떠 있는 window로 선택 영역 보내기, greenroom server가 없을 때 pane 화면 보내기(새 workspace 대기 경로), 둘 다 host buffer를 남기지 않는지.
 
 ### P3. paste buffer 동기화 (구현 안 함)
 
 - tmux 3.7 이상에서 host가 `set-clipboard on`이면 popup 안 복사가 OSC 52로 바깥 터미널 clipboard에 가고, host도 paste buffer로 저장한다 (실측 19). 추가 구현이 필요 없다.
-- 3.4~3.6용으로는 agent server `copy-command`를 host `load-buffer`로 바꾸는 한 줄이면 된다 (실측 20). 필요해지면 그때 넣는다.
+- 3.4~3.6용으로는 greenroom server `copy-command`를 host `load-buffer`로 바꾸는 한 줄이면 된다 (실측 20). 필요해지면 그때 넣는다.
 
 ### P4. agent resume 항목 (뺌)
 
-- agent에 들어가 resume하면 되고, `claude --continue` 같은 항목은 기존 옵션으로 만들 수 있다 (`@greenroom-agents`에 이름 추가, `@greenroom-<name>-cmd`에 명령).
+- agent에 들어가 resume하면 되고, `claude --continue` 같은 항목은 기존 옵션으로 만들 수 있다 (`@greenroom-profiles`에 이름 추가, `@greenroom-profile-<name>-cmd`에 명령).
 
 ## 요구사항
 

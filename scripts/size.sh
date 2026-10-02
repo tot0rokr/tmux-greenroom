@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs in the agent server. Stores the new popup size on the host server and
-# has the host open the popup again at that size, on the host client that
+# Runs in the greenroom server. Stores the new popup size on the host server
+# and has the host open the popup again at that size, on the host client that
 # shows the given inner client.
 #
 #   size.sh large|grow|shrink|reset <client-pid> <workspace>
@@ -101,7 +101,7 @@ main() {
 
 # Keys typed during a re-open reach the new client at once, so two size keys
 # can run together; the lock makes each start from the size the last stored.
-# A job's output or failure would cover the agent pane.
+# A job's output or failure would cover the pane.
 {
   tmux wait-for -L greenroom_size
   main "$@"

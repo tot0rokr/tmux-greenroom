@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs in the agent server (from a key binding or right after attach).
+# Runs in the greenroom server (from a key binding or right after attach).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Runs in the agent server right after attach. Pastes the text sent from the
-# host into the agent pane. A just-started agent gets time to draw its prompt
-# first, since tmux cannot tell when it starts reading input.
+# Runs in the greenroom server right after attach. Pastes the text sent from
+# the host into the pane. A just-started program, such as an agent CLI, gets
+# time to draw its prompt first, since tmux cannot tell when it starts reading
+# input.
 #
 #   paste.sh <pane> now|wait
 

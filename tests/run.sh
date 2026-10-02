@@ -7,7 +7,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ID="tgr-test-$$"
 HARNESS=(tmux -L "$ID-harness" -f /dev/null)
 HOST=(tmux -L "$ID-host")
-AGENT=(tmux -L "$ID-agent")
+GREENROOM=(tmux -L "$ID-greenroom")
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tgr-test.XXXXXX")
 # Characters that break shell quoting, tmux formats and tmux argv parsing.
 ORIGIN="$WORK_DIR/it's #S \$x;"
@@ -21,7 +21,7 @@ FAILURES=()
 stop_servers() {
   "${HARNESS[@]}" kill-server 2>/dev/null
   "${HOST[@]}" kill-server 2>/dev/null
-  "${AGENT[@]}" kill-server 2>/dev/null
+  "${GREENROOM[@]}" kill-server 2>/dev/null
   tmux -L "$ID-guard" kill-server 2>/dev/null
 }
 
@@ -86,7 +86,7 @@ start_host() {
   launch_host "$@"
 }
 
-# Starts the harness and the host server, and leaves the agent server alone.
+# Starts the harness and the host server, and leaves the greenroom server alone.
 launch_host() {
   local line
   {
@@ -97,11 +97,11 @@ launch_host() {
       'set -g default-terminal tmux-256color' \
       'set -s extended-keys on' \
       "set -as terminal-features ',tmux*:extkeys'" \
-      "set -g @greenroom-socket '$ID-agent'" \
-      "set -g @greenroom-agents 'claude codex missing | shell'" \
-      "set -g @greenroom-claude-cmd '\"$WORK_DIR/stub-agent\" claude'" \
-      "set -g @greenroom-codex-cmd '\"$WORK_DIR/stub-agent\" codex'" \
-      "set -g @greenroom-missing-cmd 'no-such-agent-binary --flag'"
+      "set -g @greenroom-socket '$ID-greenroom'" \
+      "set -g @greenroom-profiles 'claude codex missing | shell'" \
+      "set -g @greenroom-profile-claude-cmd '\"$WORK_DIR/stub-agent\" claude'" \
+      "set -g @greenroom-profile-codex-cmd '\"$WORK_DIR/stub-agent\" codex'" \
+      "set -g @greenroom-profile-missing-cmd 'no-such-agent-binary --flag'"
     for line in "$@"; do
       printf '%s\n' "$line"
     done
@@ -141,28 +141,28 @@ screen_has() {
   screen | grep -qF -- "$1"
 }
 
-agent_client_session() {
-  "${AGENT[@]}" list-clients -F '#{client_session}' 2>/dev/null
+greenroom_client_session() {
+  "${GREENROOM[@]}" list-clients -F '#{client_session}' 2>/dev/null
 }
 
 popup_on() {
-  [[ $(agent_client_session) == "$1" ]]
+  [[ $(greenroom_client_session) == "$1" ]]
 }
 
 popup_closed() {
-  [[ -z $(agent_client_session) ]] && ! screen_has ' agents '
+  [[ -z $(greenroom_client_session) ]] && ! screen_has ' greenroom '
 }
 
-agent_windows() {
-  "${AGENT[@]}" list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | tr '\n' ' '
+workspace_windows() {
+  "${GREENROOM[@]}" list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | tr '\n' ' '
 }
 
 has_window() {
-  "${AGENT[@]}" list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | grep -qx "$2"
+  "${GREENROOM[@]}" list-windows -t "=$1" -F '#{window_name}' 2>/dev/null | grep -qx "$2"
 }
 
 pane_field() {
-  "${AGENT[@]}" display-message -p -t "=$1:$2" "$3" | unescape_output
+  "${GREENROOM[@]}" display-message -p -t "=$1:$2" "$3" | unescape_output
 }
 
 # is_bound <table> <key> <tmux command...>
@@ -175,8 +175,8 @@ is_bound() {
     END { exit !found }'
 }
 
-agent_server_gone() {
-  ! "${AGENT[@]}" list-sessions >/dev/null 2>&1
+greenroom_server_gone() {
+  ! "${GREENROOM[@]}" list-sessions >/dev/null 2>&1
 }
 
 open_popup() {
@@ -186,29 +186,29 @@ open_popup() {
 
 # --- tests -------------------------------------------------------------------
 
-test_toggle_opens_workspace_with_default_agent() {
+test_toggle_opens_workspace_with_default_profile() {
   start_host
   open_popup || return
-  [[ $(agent_windows main) == 'claude ' ]] || fail "windows: $(agent_windows main)" || return
+  [[ $(workspace_windows main) == 'claude ' ]] || fail "windows: $(workspace_windows main)" || return
   [[ $(pane_field main claude '#{pane_current_path}') == "$ORIGIN" ]] ||
-    fail "agent cwd: $(pane_field main claude '#{pane_current_path}')" || return
-  [[ $("${AGENT[@]}" show-option -qv -t =main: @greenroom_origin | unescape_output) == "$ORIGIN" ]] ||
+    fail "claude cwd: $(pane_field main claude '#{pane_current_path}')" || return
+  [[ $("${GREENROOM[@]}" show-option -qv -t =main: @greenroom_origin | unescape_output) == "$ORIGIN" ]] ||
     fail "origin option not set" || return
   wait_for screen_has "STUB claude in $ORIGIN" || fail "stub output not visible in popup"
 }
 
-test_toggle_inside_popup_detaches_and_keeps_agent() {
+test_toggle_inside_popup_detaches_and_keeps_the_window() {
   local pid
   start_host
   open_popup || return
   pid=$(pane_field main claude '#{pane_pid}')
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  has_window main claude || fail "agent window gone" || return
-  kill -0 "$pid" 2>/dev/null || fail "agent process $pid died"
+  has_window main claude || fail "claude window gone" || return
+  kill -0 "$pid" 2>/dev/null || fail "claude process $pid died"
 }
 
-test_reopen_shows_the_same_agent() {
+test_reopen_shows_the_same_window() {
   local pane
   start_host
   open_popup || return
@@ -216,22 +216,22 @@ test_reopen_shows_the_same_agent() {
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
   open_popup || return
-  [[ $(pane_field main claude '#{pane_id}') == "$pane" ]] || fail "agent pane changed"
+  [[ $(pane_field main claude '#{pane_id}') == "$pane" ]] || fail "claude pane changed"
 }
 
-test_agent_menu_adds_agent_in_origin() {
+test_profile_menu_adds_a_window_in_origin() {
   start_host
   open_popup || return
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown" || return
   press o
-  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)" || return
+  wait_for has_window main codex || fail "codex window not created: $(workspace_windows main)" || return
   [[ $(pane_field main codex '#{pane_current_path}') == "$ORIGIN" ]] ||
     fail "codex cwd: $(pane_field main codex '#{pane_current_path}')"
 }
 
-test_agent_command_keeps_shell_syntax() {
-  start_host "set -g @greenroom-claude-cmd '\"$WORK_DIR/stub-agent\" \"v\$((1+2))\"'"
+test_profile_command_keeps_shell_syntax() {
+  start_host "set -g @greenroom-profile-claude-cmd '\"$WORK_DIR/stub-agent\" \"v\$((1+2))\"'"
   open_popup || return
   wait_for screen_has "STUB v3 in" || fail "command was not run as written"
 }
@@ -241,19 +241,19 @@ test_host_option_changes_apply_on_next_open() {
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -g @greenroom-codex-cmd "\"$WORK_DIR/stub-agent\" codex-new"
+  "${HOST[@]}" set-option -g @greenroom-profile-codex-cmd "\"$WORK_DIR/stub-agent\" codex-new"
   open_popup || return
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown" || return
   press o
   wait_for screen_has "STUB codex-new in" || fail "old command still used"
 }
 
-test_missing_agent_reports_status_then_closes() {
+test_missing_command_reports_status_then_closes() {
   start_host
   open_popup || return
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown" || return
   press m
   wait_for screen_has 'missing exited with status 127' || fail "no exit status shown" || return
   press x
@@ -264,27 +264,27 @@ no_window() {
   ! has_window "$1" "$2"
 }
 
-test_last_agent_exit_closes_popup_and_server() {
+test_last_window_exit_closes_popup_and_server() {
   start_host
   open_popup || return
-  "${AGENT[@]}" send-keys -t =main:claude quit Enter
+  "${GREENROOM[@]}" send-keys -t =main:claude quit Enter
   wait_for popup_closed || fail "popup still open" || return
-  wait_for agent_server_gone || fail "agent server still running"
+  wait_for greenroom_server_gone || fail "greenroom server still running"
 }
 
-test_last_agent_exit_does_not_switch_workspace() {
+test_last_window_exit_does_not_switch_workspace() {
   start_host
   open_popup || return
-  "${AGENT[@]}" new-session -d -s other "sleep 600"
-  "${AGENT[@]}" send-keys -t =main:claude quit Enter
-  wait_for popup_closed || fail "popup did not close: client on $(agent_client_session)" || return
-  "${AGENT[@]}" has-session -t =other || fail "other workspace is gone"
+  "${GREENROOM[@]}" new-session -d -s other "sleep 600"
+  "${GREENROOM[@]}" send-keys -t =main:claude quit Enter
+  wait_for popup_closed || fail "popup did not close: client on $(greenroom_client_session)" || return
+  "${GREENROOM[@]}" has-session -t =other || fail "other workspace is gone"
 }
 
-test_failed_agent_waits_for_a_key() {
+test_failed_command_waits_for_a_key() {
   start_host
   open_popup || return
-  "${AGENT[@]}" send-keys -t =main:claude fail Enter
+  "${GREENROOM[@]}" send-keys -t =main:claude fail Enter
   wait_for screen_has 'claude exited with status 3' || fail "no exit status shown" || return
   popup_on main || fail "popup closed before a key press" || return
   press x
@@ -301,8 +301,8 @@ test_changed_key_replaces_the_old_binding() {
   ! is_bound prefix g "${HOST[@]}" || fail "host still binds g" || return
   press C-a y
   wait_for popup_on main || fail "popup did not open with the new key" || return
-  is_bound prefix y "${AGENT[@]}" || fail "agent server does not bind y" || return
-  ! is_bound prefix g "${AGENT[@]}" || fail "agent server still binds g" || return
+  is_bound prefix y "${GREENROOM[@]}" || fail "greenroom server does not bind y" || return
+  ! is_bound prefix g "${GREENROOM[@]}" || fail "greenroom server still binds g" || return
   press C-a y
   wait_for popup_closed || fail "new key did not close the popup"
 }
@@ -312,17 +312,17 @@ menu_closed() {
 }
 
 test_menu_key_options_bind_on_host_and_in_popup() {
-  start_host "set -g @greenroom-agents-key C" "set -g @greenroom-workspaces-key W"
+  start_host "set -g @greenroom-profiles-key C" "set -g @greenroom-workspaces-key W"
   is_bound prefix W "${HOST[@]}" || fail "host does not bind W" || return
   ! is_bound prefix G "${HOST[@]}" || fail "host still binds the default G" || return
   open_popup || return
-  is_bound prefix C "${AGENT[@]}" || fail "agent server does not bind C" || return
-  is_bound prefix W "${AGENT[@]}" || fail "agent server does not bind W" || return
-  ! is_bound prefix G "${AGENT[@]}" || fail "agent server binds the default G" || return
+  is_bound prefix C "${GREENROOM[@]}" || fail "greenroom server does not bind C" || return
+  is_bound prefix W "${GREENROOM[@]}" || fail "greenroom server does not bind W" || return
+  ! is_bound prefix G "${GREENROOM[@]}" || fail "greenroom server binds the default G" || return
   press C-a C
-  wait_for screen_has 'new agent' || fail "agent menu not shown with C" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown with C" || return
   press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
   press C-a W
   wait_for screen_has 'New workspace' || fail "workspace menu not shown with W"
 }
@@ -336,8 +336,8 @@ test_workspace_menu_creates_and_switches() {
   wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
   type_text 'code review'
   press Enter
-  wait_for popup_on code_review || fail "client not on code_review: $(agent_client_session)" || return
-  [[ $(agent_windows code_review) == 'claude ' ]] || fail "windows: $(agent_windows code_review)" || return
+  wait_for popup_on code_review || fail "client not on code_review: $(greenroom_client_session)" || return
+  [[ $(workspace_windows code_review) == 'claude ' ]] || fail "windows: $(workspace_windows code_review)" || return
   [[ $(pane_field code_review claude '#{pane_current_path}') == "$ORIGIN" ]] ||
     fail "new workspace cwd: $(pane_field code_review claude '#{pane_current_path}')"
 }
@@ -356,9 +356,9 @@ test_host_menu_key_opens_workspace_menu() {
   wait_for screen_has 'New workspace' || fail "workspace menu not shown"
 }
 
-test_shift_enter_reaches_the_agent() {
+test_shift_enter_reaches_the_pane() {
   start_host "set -g @greenroom-default keylog" \
-    "set -g @greenroom-keylog-cmd '\"$WORK_DIR/key-logger\" \"$WORK_DIR/keys.log\"'"
+    "set -g @greenroom-profile-keylog-cmd '\"$WORK_DIR/key-logger\" \"$WORK_DIR/keys.log\"'"
   open_popup || return
   wait_for test -e "$WORK_DIR/keys.log" || fail "key logger did not start" || return
   sleep 0.3
@@ -372,8 +372,8 @@ got_shift_enter() {
   grep -qF -e '\[ 2 7 \; 2 \; 1 3 \~' -e '\[ 1 3 \; 2 u' "$WORK_DIR/keys.log"
 }
 
-test_plugin_is_inert_inside_agent_server() {
-  local guard=(tmux -L "$ID-guard" -f "$REPO_DIR/conf/agent-server.conf")
+test_plugin_is_inert_inside_greenroom_server() {
+  local guard=(tmux -L "$ID-guard" -f "$REPO_DIR/conf/greenroom-server.conf")
   "${guard[@]}" new-session -d \; run-shell "$REPO_DIR/greenroom.tmux"
   ! is_bound prefix g "${guard[@]}" || fail "host keys were bound" || return
   # Control: the same load binds the keys once the marker is gone.
@@ -381,24 +381,24 @@ test_plugin_is_inert_inside_agent_server() {
   is_bound prefix g "${guard[@]}" || fail "plugin did not bind keys without the marker"
 }
 
-test_removed_host_option_is_removed_from_agent_server() {
-  start_host "set -g @greenroom-missing-cmd '\"$WORK_DIR/stub-agent\" missing-set'"
+test_removed_host_option_is_removed_from_greenroom_server() {
+  start_host "set -g @greenroom-profile-missing-cmd '\"$WORK_DIR/stub-agent\" missing-set'"
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -gu @greenroom-missing-cmd
+  "${HOST[@]}" set-option -gu @greenroom-profile-missing-cmd
   open_popup || return
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown" || return
   press m
   wait_for screen_has 'missing exited with status 127' || fail "removed command still used"
 }
 
-test_agent_server_reads_extra_config() {
-  printf '%s\n' 'set -g @from-extra-config yes' > "$WORK_DIR/agent.conf"
-  start_host "set -g @greenroom-config '$WORK_DIR/agent.conf'"
+test_greenroom_server_reads_extra_config() {
+  printf '%s\n' 'set -g @from-extra-config yes' > "$WORK_DIR/greenroom.conf"
+  start_host "set -g @greenroom-config '$WORK_DIR/greenroom.conf'"
   open_popup || return
-  [[ $("${AGENT[@]}" show-option -gqv @from-extra-config) == yes ]] || fail "extra config not read"
+  [[ $("${GREENROOM[@]}" show-option -gqv @from-extra-config) == yes ]] || fail "extra config not read"
 }
 
 test_root_key_toggles_without_prefix() {
@@ -413,9 +413,9 @@ test_shell_entry_starts_a_login_shell() {
   start_host
   open_popup || return
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
+  wait_for screen_has ' profiles ' || fail "profile menu not shown" || return
   press s
-  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)" || return
+  wait_for has_window main shell || fail "shell window not created: $(workspace_windows main)" || return
   # exec -l puts a '-' in front of $0.
   type_text 'echo LOGIN:$0'
   press Enter
@@ -432,8 +432,8 @@ test_workspace_menu_renames_with_a_clean_name() {
   press C-u
   type_text 'v1.2 next'
   press Enter
-  wait_for popup_on v1_2_next || fail "client not on v1_2_next: $(agent_client_session)" || return
-  [[ $("${AGENT[@]}" show-option -gqv @greenroom_last) == v1_2_next ]] || fail "last workspace not updated"
+  wait_for popup_on v1_2_next || fail "client not on v1_2_next: $(greenroom_client_session)" || return
+  [[ $("${GREENROOM[@]}" show-option -gqv @greenroom_last) == v1_2_next ]] || fail "last workspace not updated"
 }
 
 test_workspace_menu_kills_the_workspace() {
@@ -445,7 +445,7 @@ test_workspace_menu_kills_the_workspace() {
   wait_for screen_has 'kill workspace main?' || fail "confirmation not shown" || return
   press y
   wait_for popup_closed || fail "popup still open" || return
-  wait_for agent_server_gone || fail "workspace still exists"
+  wait_for greenroom_server_gone || fail "workspace still exists"
 }
 
 test_default_workspace_name_is_cleaned() {
@@ -466,17 +466,17 @@ test_bell_in_a_closed_popup_alerts_the_host() {
   open_popup || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${AGENT[@]}" send-keys -t =main:claude bell Enter
+  "${GREENROOM[@]}" send-keys -t =main:claude bell Enter
   wait_for host_alert_is 'claude@main' || fail "host alert: [$(host_alert)]" || return
   wait_for screen_has 'greenroom: claude@main rang the bell' || fail "no message on the host" || return
   open_popup || return
   wait_for host_alert_is '' || fail "alert not cleared after opening: [$(host_alert)]"
 }
 
-test_bell_in_the_visible_agent_is_not_announced() {
+test_bell_in_the_visible_window_is_not_announced() {
   start_host
   open_popup || return
-  "${AGENT[@]}" send-keys -t =main:claude bell Enter
+  "${GREENROOM[@]}" send-keys -t =main:claude bell Enter
   sleep 1
   host_alert_is '' || fail "host alert: [$(host_alert)]"
 }
@@ -492,15 +492,15 @@ test_status_snippet_shows_only_an_alert() {
     fail "rendered: $("${HOST[@]}" display-message -p "$STATUS_SNIPPET")"
 }
 
-agent_pane_has() {
-  "${AGENT[@]}" capture-pane -p -t "=$1:" 2>/dev/null | grep -qF -- "$2"
+active_pane_has() {
+  "${GREENROOM[@]}" capture-pane -p -t "=$1:" 2>/dev/null | grep -qF -- "$2"
 }
 
 host_buffers() {
   "${HOST[@]}" list-buffers -F '#{buffer_name}' 2>/dev/null
 }
 
-test_selection_is_sent_to_the_agent() {
+test_selection_is_sent_to_the_active_pane() {
   start_host
   open_popup || return
   press C-a g
@@ -514,7 +514,7 @@ test_selection_is_sent_to_the_agent() {
     send-keys -t host: -X end-of-line
   press a
   wait_for popup_on main || fail "popup did not open" || return
-  wait_for agent_pane_has main 'SEND-ME-123' || fail "text did not reach the agent" || return
+  wait_for active_pane_has main 'SEND-ME-123' || fail "text did not reach the pane" || return
   [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
 }
 
@@ -525,21 +525,21 @@ test_pane_screen_is_sent_to_a_new_workspace() {
   wait_for screen_has 'PANE-MARKER-9' || fail "host pane output not shown" || return
   press C-a S
   wait_for popup_on main || fail "popup did not open" || return
-  wait_for agent_pane_has main 'STUB claude in' || fail "agent did not start" || return
-  wait_for agent_pane_has main 'PANE-MARKER-9' || fail "screen did not reach the agent" || return
+  wait_for active_pane_has main 'STUB claude in' || fail "claude did not start" || return
+  wait_for active_pane_has main 'PANE-MARKER-9' || fail "screen did not reach the pane" || return
   [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
 }
 
-open_agent_menu() {
+open_profile_menu() {
   press C-a c
-  wait_for screen_has 'new agent' || fail "agent menu not shown"
+  wait_for screen_has ' profiles ' || fail "profile menu not shown"
 }
 
-# Prints the agent menu as drawn: "name(key)" per item, "|" per separator
+# Prints the profile menu as drawn: "name(key)" per item, "|" per separator
 # line, "<blank>" per empty row. Box characters depend on the locale, so rows
 # are found by the columns of the top border.
 menu_items() {
-  local title=' new agent ' lines=() items=() line i top=-1
+  local title=' profiles ' lines=() items=() line i top=-1
   local before after edge tail left width bar row inner
   local keyed='^ *(.*[^ ]) +\(([^()]+)\) *$' plain='^ *(.*[^ ]) *$'
   while IFS= read -r line; do
@@ -589,264 +589,281 @@ menu_item_dim() {
 }
 
 windows_are() {
-  [[ $(agent_windows "$1") == "$2" ]]
+  [[ $(workspace_windows "$1") == "$2" ]]
 }
 
-test_agent_menu_default_puts_shell_after_a_separator() {
-  start_host 'set -gu @greenroom-agents'
+test_profile_menu_default_puts_shell_after_a_separator() {
+  start_host 'set -gu @greenroom-profiles'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o) gemini(e) opencode(p) | shell(s)' || fail "menu: [$(menu_items)]" || return
   press s
-  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)"
+  wait_for has_window main shell || fail "shell window not created: $(workspace_windows main)"
 }
 
-test_agent_menu_follows_the_list_order() {
-  start_host "set -g @greenroom-agents 'shell codex | claude'"
+test_profile_menu_follows_the_list_order() {
+  start_host "set -g @greenroom-profiles 'shell codex | claude'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'shell(s) codex(c) | claude(l)' || fail "menu: [$(menu_items)]" || return
   press l
-  wait_for windows_are main 'claude claude ' || fail "windows: $(agent_windows main)"
+  wait_for windows_are main 'claude claude ' || fail "windows: $(workspace_windows main)"
 }
 
-test_agent_menu_without_shell() {
-  start_host "set -g @greenroom-agents 'claude codex'"
+test_profile_menu_without_shell() {
+  start_host "set -g @greenroom-profiles 'claude codex'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o)' || fail "menu: [$(menu_items)]" || return
   # If s still started a shell, the menu would be gone before o.
   press s
   press o
-  wait_for has_window main codex || fail "codex window not created after s: $(agent_windows main)" || return
-  windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+  wait_for has_window main codex || fail "codex window not created after s: $(workspace_windows main)" || return
+  windows_are main 'claude codex ' || fail "windows: $(workspace_windows main)"
 }
 
-test_agent_menu_drops_extra_separators() {
-  start_host "set -g @greenroom-agents '| |  claude | | codex  missing | |'"
+test_profile_menu_drops_extra_separators() {
+  start_host "set -g @greenroom-profiles '| |  claude | | codex  missing | |'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) | codex(o) missing(m)' || fail "menu: [$(menu_items)]"
 }
 
-test_agent_menu_drops_separators_left_by_skipped_names() {
-  start_host "set -g @greenroom-agents 'claude | bad.name | codex | claude'"
+test_profile_menu_drops_separators_left_by_skipped_names() {
+  start_host "set -g @greenroom-profiles 'claude | bad.name | codex | claude'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) | codex(o)' || fail "menu: [$(menu_items)]"
 }
 
-test_agent_menu_custom_agent_runs_its_command() {
-  start_host "set -g @greenroom-agents 'claude my_cli-2 k9s'" \
-    "set -g @greenroom-my_cli-2-cmd '\"$WORK_DIR/stub-agent\" my-cli-run'"
+test_profile_menu_custom_profile_runs_its_command() {
+  start_host "set -g @greenroom-profiles 'claude my_cli-2 k9s'" \
+    "set -g @greenroom-profile-my_cli-2-cmd '\"$WORK_DIR/stub-agent\" my-cli-run'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) my_cli-2(m) k9s(9)' || fail "menu: [$(menu_items)]" || return
   press m
-  wait_for has_window main my_cli-2 || fail "my_cli-2 window not created: $(agent_windows main)" || return
+  wait_for has_window main my_cli-2 || fail "my_cli-2 window not created: $(workspace_windows main)" || return
   wait_for screen_has "STUB my-cli-run in $ORIGIN" || fail "custom command not run in the origin"
 }
 
-test_agent_menu_custom_agent_without_cmd_runs_its_name() {
-  start_host "set -g @greenroom-agents 'claude tgr-plain'"
+test_profile_menu_custom_profile_without_cmd_runs_its_name() {
+  start_host "set -g @greenroom-profiles 'claude tgr-plain'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) tgr-plain(t)' || fail "menu: [$(menu_items)]" || return
   press t
   wait_for screen_has 'tgr-plain exited with status 127' || fail "no exit status shown" || return
   screen | grep -q 'tgr-plain: .*not found' || fail "the name was not run as the command"
 }
 
-test_agent_menu_shell_cmd_replaces_the_login_shell() {
-  start_host "set -g @greenroom-agents 'shell claude'" \
-    "set -g @greenroom-shell-cmd '\"$WORK_DIR/stub-agent\" my-shell'"
+test_profile_menu_shell_cmd_replaces_the_login_shell() {
+  start_host "set -g @greenroom-profiles 'shell claude'" \
+    "set -g @greenroom-profile-shell-cmd '\"$WORK_DIR/stub-agent\" my-shell'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'shell(s) claude(c)' || fail "menu: [$(menu_items)]" || return
   press s
-  wait_for has_window main shell || fail "shell window not created: $(agent_windows main)" || return
+  wait_for has_window main shell || fail "shell window not created: $(workspace_windows main)" || return
   wait_for screen_has "STUB my-shell in $ORIGIN" || fail "shell command not used"
 }
 
-test_agent_menu_explicit_keys_are_shown_and_work() {
-  start_host "set -g @greenroom-agents 'claude codex missing'" \
-    'set -g @greenroom-claude-key M-a' \
-    'set -g @greenroom-codex-key X' \
-    'set -g @greenroom-missing-key 1'
+test_profile_menu_explicit_keys_are_shown_and_work() {
+  start_host "set -g @greenroom-profiles 'claude codex missing'" \
+    'set -g @greenroom-profile-claude-key M-a' \
+    'set -g @greenroom-profile-codex-key X' \
+    'set -g @greenroom-profile-missing-key 1'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(M-a) codex(X) missing(1)' || fail "menu: [$(menu_items)]" || return
   press X
-  wait_for windows_are main 'claude codex ' || fail "X: windows: $(agent_windows main)" || return
-  open_agent_menu || return
+  wait_for windows_are main 'claude codex ' || fail "X: windows: $(workspace_windows main)" || return
+  open_profile_menu || return
   press M-a
-  wait_for windows_are main 'claude codex claude ' || fail "M-a: windows: $(agent_windows main)" || return
-  open_agent_menu || return
+  wait_for windows_are main 'claude codex claude ' || fail "M-a: windows: $(workspace_windows main)" || return
+  open_profile_menu || return
   press 1
-  wait_for has_window main missing || fail "1: windows: $(agent_windows main)"
+  wait_for has_window main missing || fail "1: windows: $(workspace_windows main)"
 }
 
-test_agent_menu_explicit_key_may_be_a_menu_key() {
-  start_host "set -g @greenroom-agents 'claude codex'" 'set -g @greenroom-codex-key j'
+test_profile_menu_explicit_key_may_be_a_menu_key() {
+  start_host "set -g @greenroom-profiles 'claude codex'" 'set -g @greenroom-profile-codex-key j'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(j)' || fail "menu: [$(menu_items)]" || return
   press j
-  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+  wait_for has_window main codex || fail "codex window not created: $(workspace_windows main)"
 }
 
-test_agent_menu_explicit_arrow_keys_fall_back() {
-  start_host "set -g @greenroom-agents 'claude codex missing shell gemini opencode'" \
-    'set -g @greenroom-claude-key Up' \
-    'set -g @greenroom-codex-key Down' \
-    'set -g @greenroom-missing-key Left' \
-    'set -g @greenroom-shell-key Right' \
-    'set -g @greenroom-gemini-key S-Up' \
-    'set -g @greenroom-opencode-key down'
+test_profile_menu_explicit_arrow_keys_fall_back() {
+  start_host "set -g @greenroom-profiles 'claude codex missing shell gemini opencode'" \
+    'set -g @greenroom-profile-claude-key Up' \
+    'set -g @greenroom-profile-codex-key Down' \
+    'set -g @greenroom-profile-missing-key Left' \
+    'set -g @greenroom-profile-shell-key Right' \
+    'set -g @greenroom-profile-gemini-key S-Up' \
+    'set -g @greenroom-profile-opencode-key down'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o) missing(m) shell(s) gemini(e) opencode(p)' || fail "menu: [$(menu_items)]" || return
   press o
-  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+  wait_for has_window main codex || fail "codex window not created: $(workspace_windows main)"
 }
 
-test_agent_menu_second_claim_on_a_key_falls_back() {
-  start_host "set -g @greenroom-agents 'claude codex'" \
-    'set -g @greenroom-claude-key x' \
-    'set -g @greenroom-codex-key x'
+test_profile_menu_second_claim_on_a_key_falls_back() {
+  start_host "set -g @greenroom-profiles 'claude codex'" \
+    'set -g @greenroom-profile-claude-key x' \
+    'set -g @greenroom-profile-codex-key x'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(x) codex(c)' || fail "menu: [$(menu_items)]" || return
   press c
-  wait_for windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+  wait_for windows_are main 'claude codex ' || fail "windows: $(workspace_windows main)"
 }
 
-test_agent_menu_automatic_key_skips_a_later_explicit_key() {
-  start_host "set -g @greenroom-agents 'claude codex'" 'set -g @greenroom-codex-key c'
+test_profile_menu_automatic_key_skips_a_later_explicit_key() {
+  start_host "set -g @greenroom-profiles 'claude codex'" 'set -g @greenroom-profile-codex-key c'
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(l) codex(c)' || fail "menu: [$(menu_items)]" || return
   press c
-  wait_for windows_are main 'claude codex ' || fail "windows: $(agent_windows main)"
+  wait_for windows_are main 'claude codex ' || fail "windows: $(workspace_windows main)"
 }
 
-test_agent_menu_explicit_key_may_end_in_a_semicolon() {
-  start_host "set -g @greenroom-agents 'claude codex missing'" \
-    "set -g @greenroom-codex-key ';'" \
-    "set -g @greenroom-missing-key 'M-;'"
+test_profile_menu_explicit_key_may_end_in_a_semicolon() {
+  start_host "set -g @greenroom-profiles 'claude codex missing'" \
+    "set -g @greenroom-profile-codex-key ';'" \
+    "set -g @greenroom-profile-missing-key 'M-;'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(;) missing(M-;)' || fail "menu: [$(menu_items)]" || return
   # A bare ';' argument would end send-keys.
   press '\;'
-  wait_for has_window main codex || fail "codex window not created: $(agent_windows main)"
+  wait_for has_window main codex || fail "codex window not created: $(workspace_windows main)"
 }
 
-test_agent_menu_ignores_the_plugin_key_options() {
-  start_host "set -g @greenroom-agents 'claude root send send-pane agents workspaces'" \
-    'set -g @greenroom-root-key M-r' \
-    'set -g @greenroom-send-key x' \
-    'set -g @greenroom-send-pane-key X' \
-    'set -g @greenroom-agents-key C' \
-    'set -g @greenroom-workspaces-key W' \
-    "set -g @greenroom-root-cmd '\"$WORK_DIR/stub-agent\" root'"
+host_bound() {
+  "${HOST[@]}" show-option -gqv @greenroom_bound
+}
+
+# A profile may have the name of a plugin key option, such as root for
+# @greenroom-root-key: its key option is @greenroom-profile-root-key, so
+# neither key changes the other. grow has no profile key, so it takes an
+# automatic shortcut rather than the + of @greenroom-grow-key.
+test_profile_menu_names_of_plugin_keys_take_their_profile_keys() {
+  start_host "set -g @greenroom-profiles 'root send send-pane profiles workspaces large grow shrink reset'" \
+    'set -g @greenroom-profile-root-key 1' 'set -g @greenroom-profile-send-key 2' \
+    'set -g @greenroom-profile-send-pane-key 3' 'set -g @greenroom-profile-profiles-key 4' \
+    'set -g @greenroom-profile-workspaces-key 5' 'set -g @greenroom-profile-large-key 6' \
+    'set -g @greenroom-profile-shrink-key 8' 'set -g @greenroom-profile-reset-key 9' \
+    "set -g @greenroom-profile-root-cmd '\"$WORK_DIR/stub-agent\" root'" \
+    'set -g @greenroom-root-key M-r' 'set -g @greenroom-grow-key +'
+  [[ $(host_bound) == ' prefix:g root:M-r prefix:G copy-mode:a copy-mode-vi:a prefix:S' ]] ||
+    fail "host keys: [$(host_bound)]" || return
   open_popup || return
-  press C-a C
-  wait_for screen_has 'new agent' || fail "agent menu not shown" || return
-  wait_for menu_is 'claude(c) root(r) send(s) send-pane(e) agents(a) workspaces(w)' ||
+  [[ $(greenroom_bound) == ' prefix:C-a prefix:g root:M-r prefix:G prefix:c prefix:z prefix:+' ]] ||
+    fail "greenroom server keys: [$(greenroom_bound)]" || return
+  open_profile_menu || return
+  # g is reserved, so grow gets r.
+  wait_for menu_is 'root(1) send(2) send-pane(3) profiles(4) workspaces(5) large(6) grow(r) shrink(8) reset(9)' ||
     fail "menu: [$(menu_items)]" || return
-  press r
-  wait_for screen_has "STUB root in $ORIGIN" || fail "root command not run"
+  press 1
+  wait_for screen_has "STUB root in $ORIGIN" || fail "root profile not run" || return
+  size_key + 90% 90% || return
+  press M-r
+  wait_for popup_closed || fail "root key did not close the popup" || return
+  press M-r
+  wait_for popup_on main || fail "root key did not open the popup"
 }
 
-test_agent_menu_skips_invalid_names() {
+test_profile_menu_skips_invalid_names() {
   # o.k would take o from codex if it were not skipped.
-  start_host "set -g @greenroom-agents 'claude o.k codex it#S'"
+  start_host "set -g @greenroom-profiles 'claude o.k codex it#S'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o)' || fail "menu: [$(menu_items)]"
 }
 
-test_agent_menu_name_may_start_with_a_dash() {
+test_profile_menu_name_may_start_with_a_dash() {
   # display-menu disables an item whose name starts with '-'.
-  start_host "set -g @greenroom-agents '-dash claude'" \
-    "set -g @greenroom--dash-cmd '\"$WORK_DIR/stub-agent\" dash'"
+  start_host "set -g @greenroom-profiles '-dash claude'" \
+    "set -g @greenroom-profile--dash-cmd '\"$WORK_DIR/stub-agent\" dash'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is '-dash(d) claude(c)' || fail "menu: [$(menu_items)]" || return
   press d
-  wait_for windows_are main 'claude -dash ' || fail "windows: $(agent_windows main)" || return
+  wait_for windows_are main 'claude -dash ' || fail "windows: $(workspace_windows main)" || return
   wait_for screen_has "STUB dash in $ORIGIN" || fail "dash command not run"
 }
 
-test_agent_menu_shows_a_duplicate_once() {
+test_profile_menu_shows_a_duplicate_once() {
   # A second claude would take l from cline.
-  start_host "set -g @greenroom-agents 'claude codex claude cline'"
+  start_host "set -g @greenroom-profiles 'claude codex claude cline'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o) cline(l)' || fail "menu: [$(menu_items)]"
 }
 
-test_agent_menu_empty_list_shows_a_disabled_item() {
-  start_host "set -g @greenroom-agents ''"
+test_profile_menu_empty_list_shows_a_disabled_item() {
+  start_host "set -g @greenroom-profiles ''"
   open_popup || return
-  open_agent_menu || return
-  wait_for menu_is 'no agents configured' || fail "menu: [$(menu_items)]" || return
-  menu_item_dim 'no agents configured' || fail "item is not disabled" || return
+  open_profile_menu || return
+  wait_for menu_is 'no profiles configured' || fail "menu: [$(menu_items)]" || return
+  menu_item_dim 'no profiles configured' || fail "item is not disabled" || return
   press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close"
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close"
 }
 
-test_agent_menu_separator_only_list_shows_a_disabled_item() {
-  start_host "set -g @greenroom-agents '| |'"
+test_profile_menu_separator_only_list_shows_a_disabled_item() {
+  start_host "set -g @greenroom-profiles '| |'"
   open_popup || return
-  open_agent_menu || return
-  wait_for menu_is 'no agents configured' || fail "menu: [$(menu_items)]" || return
-  menu_item_dim 'no agents configured' || fail "item is not disabled"
+  open_profile_menu || return
+  wait_for menu_is 'no profiles configured' || fail "menu: [$(menu_items)]" || return
+  menu_item_dim 'no profiles configured' || fail "item is not disabled"
 }
 
-test_agent_menu_list_changes_apply_on_next_open() {
-  start_host "set -g @greenroom-agents 'claude codex'"
+test_profile_menu_list_changes_apply_on_next_open() {
+  start_host "set -g @greenroom-profiles 'claude codex'"
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'claude(c) codex(o)' || fail "first menu: [$(menu_items)]" || return
   press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -g @greenroom-agents 'codex | claude' \; set-option -g @greenroom-codex-key x
+  "${HOST[@]}" set-option -g @greenroom-profiles 'codex | claude' \; set-option -g @greenroom-profile-codex-key x
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'codex(x) | claude(c)' || fail "changed menu: [$(menu_items)]" || return
   press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -gu @greenroom-codex-key
+  "${HOST[@]}" set-option -gu @greenroom-profile-codex-key
   open_popup || return
-  open_agent_menu || return
+  open_profile_menu || return
   wait_for menu_is 'codex(c) | claude(l)' || fail "menu after removing the key: [$(menu_items)]"
 }
 
-test_default_agent_outside_the_list_still_starts() {
-  start_host "set -g @greenroom-agents 'codex'" \
+test_default_profile_outside_the_list_still_starts() {
+  start_host "set -g @greenroom-profiles 'codex'" \
     'set -g @greenroom-default aider' \
-    "set -g @greenroom-aider-cmd '\"$WORK_DIR/stub-agent\" aider'"
+    "set -g @greenroom-profile-aider-cmd '\"$WORK_DIR/stub-agent\" aider'"
   open_popup || return
-  windows_are main 'aider ' || fail "windows: $(agent_windows main)" || return
-  wait_for screen_has "STUB aider in $ORIGIN" || fail "default agent did not run" || return
-  open_agent_menu || return
+  windows_are main 'aider ' || fail "windows: $(workspace_windows main)" || return
+  wait_for screen_has "STUB aider in $ORIGIN" || fail "default profile did not run" || return
+  open_profile_menu || return
   wait_for menu_is 'codex(c)' || fail "menu: [$(menu_items)]" || return
   press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
   press C-a G
   wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
   press n
   wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
   type_text 'two'
   press Enter
-  wait_for popup_on two || fail "client not on two: $(agent_client_session)" || return
-  windows_are two 'aider ' || fail "new workspace windows: $(agent_windows two)"
+  wait_for popup_on two || fail "client not on two: $(greenroom_client_session)" || return
+  windows_are two 'aider ' || fail "new workspace windows: $(workspace_windows two)"
 }
 
 # --- popup size --------------------------------------------------------------
@@ -857,16 +874,16 @@ host_state() {
 
 # The sizes of the inner clients, sorted, each followed by a space.
 inner_sizes() {
-  "${AGENT[@]}" list-clients -F '#{client_width}x#{client_height}' 2>/dev/null | LC_ALL=C sort | tr '\n' ' '
+  "${GREENROOM[@]}" list-clients -F '#{client_width}x#{client_height}' 2>/dev/null | LC_ALL=C sort | tr '\n' ' '
 }
 
-# inner_is <size>...: the agent server has exactly these inner clients.
+# inner_is <size>...: the greenroom server has exactly these inner clients.
 inner_is() {
   [[ $(inner_sizes) == "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ]]
 }
 
 inner_pids() {
-  "${AGENT[@]}" list-clients -F '#{client_pid}' 2>/dev/null
+  "${GREENROOM[@]}" list-clients -F '#{client_pid}' 2>/dev/null
 }
 
 process_gone() {
@@ -900,16 +917,16 @@ inner_for() {
   popup_inner "${size% *}" "${size#* }" "$1" "$2"
 }
 
-agent_panes() {
-  "${AGENT[@]}" list-panes -s -t "=$1" -F '#{pane_id}' 2>/dev/null | tr '\n' ' '
+workspace_panes() {
+  "${GREENROOM[@]}" list-panes -s -t "=$1" -F '#{pane_id}' 2>/dev/null | tr '\n' ' '
 }
 
 workspace_origin() {
-  "${AGENT[@]}" show-option -qv -t "=$1:" @greenroom_origin | unescape_output
+  "${GREENROOM[@]}" show-option -qv -t "=$1:" @greenroom_origin | unescape_output
 }
 
-agent_bound() {
-  "${AGENT[@]}" show-option -gqv @greenroom_bound
+greenroom_bound() {
+  "${GREENROOM[@]}" show-option -gqv @greenroom_bound
 }
 
 # key_binding <table> <key> <tmux command...>: the list-keys line of the key.
@@ -939,24 +956,24 @@ keys_running() {
     LC_ALL=C sort | tr '\n' ' '
 }
 
-# Processes the agent server runs besides its panes: key and hook jobs.
-agent_jobs() {
+# Processes the greenroom server runs besides its panes: key and hook jobs.
+greenroom_jobs() {
   local server panes pid ppid args
-  server=$("${AGENT[@]}" display-message -p '#{pid}') || return 0
-  panes=" $("${AGENT[@]}" list-panes -a -F '#{pane_pid}' | tr '\n' ' ') "
+  server=$("${GREENROOM[@]}" display-message -p '#{pid}') || return 0
+  panes=" $("${GREENROOM[@]}" list-panes -a -F '#{pane_pid}' | tr '\n' ' ') "
   while read -r pid ppid args; do
     [[ $ppid == "$server" && $panes != *" $pid "* ]] && printf '%s\n' "$args"
   done < <(ps -A -o pid= -o ppid= -o args=)
 }
 
-no_agent_jobs() {
-  [[ -z $(agent_jobs) ]]
+no_greenroom_jobs() {
+  [[ -z $(greenroom_jobs) ]]
 }
 
 # A run-shell job that fails prints "'...' returned N" in a pane in view mode.
 pane_modes() {
   "${HOST[@]}" list-panes -a -F 'host #{pane_id} #{pane_in_mode} #{pane_mode}' 2>/dev/null
-  "${AGENT[@]}" list-panes -a -F 'agent #{pane_id} #{pane_in_mode} #{pane_mode}' 2>/dev/null
+  "${GREENROOM[@]}" list-panes -a -F 'greenroom #{pane_id} #{pane_in_mode} #{pane_mode}' 2>/dev/null
 }
 
 no_pane_in_mode() {
@@ -992,7 +1009,7 @@ popup_framed() {
     lines+=("$line")
   done < <("${HARNESS[@]}" capture-pane -p -t "$1")
   for i in "${!lines[@]}"; do
-    if [[ ${lines[i]} == *' agents '* ]]; then
+    if [[ ${lines[i]} == *' greenroom '* ]]; then
       top=$i
       break
     fi
@@ -1033,7 +1050,7 @@ size_key_is_a_no_op() {
 }
 
 host_client_records() {
-  "${AGENT[@]}" show-options -g 2>/dev/null | awk '$1 ~ /^@greenroom_host_client_/' | LC_ALL=C sort
+  "${GREENROOM[@]}" show-options -g 2>/dev/null | awk '$1 ~ /^@greenroom_host_client_/' | LC_ALL=C sort
 }
 
 most_active_host_client() {
@@ -1072,35 +1089,35 @@ test_size_large_key_toggles_a_large_popup() {
   large=$(inner_for 95% 95%)
   ! popup_framed h "${large#*x}" || fail "found a popup frame with no popup" || return
   open_popup || return
-  "${AGENT[@]}" new-window -t =main: -n second 'sleep 600'
+  "${GREENROOM[@]}" new-window -t =main: -n second 'sleep 600'
   wait_for inner_is "$normal" || fail "normal popup: inner clients $(inner_sizes), expected $normal" || return
   wait_for popup_framed h "${normal#*x}" || fail "normal popup frame not found" || return
-  is_bound prefix z "${AGENT[@]}" || fail "agent server does not bind z" || return
-  [[ " $(agent_bound) " == *' prefix:z '* ]] || fail "z not in @greenroom_bound: $(agent_bound)" || return
-  panes=$(agent_panes main)
+  is_bound prefix z "${GREENROOM[@]}" || fail "greenroom server does not bind z" || return
+  [[ " $(greenroom_bound) " == *' prefix:z '* ]] || fail "z not in @greenroom_bound: $(greenroom_bound)" || return
+  panes=$(workspace_panes main)
   pid=$(inner_pids)
 
   press C-a z
   wait_for inner_is "$large" || fail "large popup: inner clients $(inner_sizes), expected $large" || return
   [[ $(host_state large) == 1 ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
-  popup_on main || fail "popup on [$(agent_client_session)]" || return
-  [[ $(agent_panes main) == "$panes" ]] || fail "panes: $(agent_panes main), were $panes" || return
+  popup_on main || fail "popup on [$(greenroom_client_session)]" || return
+  [[ $(workspace_panes main) == "$panes" ]] || fail "panes: $(workspace_panes main), were $panes" || return
   [[ $(pane_field main '' '#{window_name}') == second ]] ||
-    fail "current agent: $(pane_field main '' '#{window_name}')" || return
+    fail "current window: $(pane_field main '' '#{window_name}')" || return
   wait_for process_gone "$pid" || fail "old inner client $pid still runs" || return
   size=$(host_client_size "$(host_client)")
   ((${large%x*} + 2 < ${size% *} && ${large#*x} + 2 < ${size#* })) ||
     fail "large popup $large is not smaller than the host client $size" || return
   wait_for popup_framed h "${large#*x}" || fail "large popup has no border or no margin" || return
-  wait_for no_agent_jobs || fail "jobs left in the agent server: $(agent_jobs)" || return
+  wait_for no_greenroom_jobs || fail "jobs left in the greenroom server: $(greenroom_jobs)" || return
   type_text 'typed-in-large'
-  wait_for agent_pane_has main 'typed-in-large' || fail "keys did not reach the agent" || return
+  wait_for active_pane_has main 'typed-in-large' || fail "keys did not reach the pane" || return
   host_pane_filled host: || fail "keys reached the host pane" || return
 
   press C-a z
   wait_for inner_is "$normal" || fail "after toggling back: inner clients $(inner_sizes), expected $normal" || return
   [[ $(host_state large) != 1 ]] || fail "still large" || return
-  [[ $(agent_panes main) == "$panes" ]] || fail "panes after toggling back: $(agent_panes main), were $panes" || return
+  [[ $(workspace_panes main) == "$panes" ]] || fail "panes after toggling back: $(workspace_panes main), were $panes" || return
   # A late popup, a second inner client or a failed job shows up by now.
   sleep 0.5
   inner_is "$normal" || fail "inner clients a moment later: $(inner_sizes)" || return
@@ -1264,22 +1281,22 @@ test_size_only_the_large_key_is_bound_by_default() {
   local script
   start_host
   open_popup || return
-  script=$(bound_script prefix z "${AGENT[@]}") ||
-    fail "z does not run a plugin script: [$(key_binding prefix z "${AGENT[@]}")]" || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
-    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")"
+  script=$(bound_script prefix z "${GREENROOM[@]}") ||
+    fail "z does not run a plugin script: [$(key_binding prefix z "${GREENROOM[@]}")]" || return
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${GREENROOM[@]}")"
 }
 
 test_size_empty_large_key_keeps_the_zoom_key() {
   local script
   start_host "set -g @greenroom-large-key ''" 'set -g @greenroom-grow-key +'
   open_popup || return
-  script=$(bound_script prefix + "${AGENT[@]}") ||
-    fail "+ does not run a plugin script: [$(key_binding prefix + "${AGENT[@]}")]" || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:+ ' ]] ||
-    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")" || return
-  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] ||
-    fail "prefix z: [$(key_binding prefix z "${AGENT[@]}")]"
+  script=$(bound_script prefix + "${GREENROOM[@]}") ||
+    fail "+ does not run a plugin script: [$(key_binding prefix + "${GREENROOM[@]}")]" || return
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:+ ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${GREENROOM[@]}")" || return
+  [[ $(key_binding prefix z "${GREENROOM[@]}") == *'resize-pane -Z'* ]] ||
+    fail "prefix z: [$(key_binding prefix z "${GREENROOM[@]}")]"
 }
 
 test_size_key_options_bind_and_unbind_on_next_open() {
@@ -1287,78 +1304,66 @@ test_size_key_options_bind_and_unbind_on_next_open() {
   start_host 'set -g @greenroom-large-key Z' 'set -g @greenroom-grow-key +' \
     'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
   open_popup || return
-  script=$(bound_script prefix Z "${AGENT[@]}") ||
-    fail "Z does not run a plugin script: [$(key_binding prefix Z "${AGENT[@]}")]" || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:+ prefix:- prefix:= prefix:Z ' ]] ||
-    fail "keys that run $script: $(keys_running "$script" "${AGENT[@]}")" || return
+  script=$(bound_script prefix Z "${GREENROOM[@]}") ||
+    fail "Z does not run a plugin script: [$(key_binding prefix Z "${GREENROOM[@]}")]" || return
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:+ prefix:- prefix:= prefix:Z ' ]] ||
+    fail "keys that run $script: $(keys_running "$script" "${GREENROOM[@]}")" || return
   for key in + - = Z; do
-    [[ " $(agent_bound) " == *" prefix:$key "* ]] || fail "$key not in @greenroom_bound: $(agent_bound)" || return
+    [[ " $(greenroom_bound) " == *" prefix:$key "* ]] || fail "$key not in @greenroom_bound: $(greenroom_bound)" || return
   done
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
   "${HOST[@]}" set-option -gu @greenroom-large-key \; set-option -gu @greenroom-grow-key \; \
     set-option -gu @greenroom-shrink-key \; set-option -gu @greenroom-reset-key
   open_popup || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
-    fail "keys that run $script after unsetting: $(keys_running "$script" "${AGENT[@]}")" || return
-  ! is_bound prefix + "${AGENT[@]}" || fail "+ is still bound"
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script after unsetting: $(keys_running "$script" "${GREENROOM[@]}")" || return
+  ! is_bound prefix + "${GREENROOM[@]}" || fail "+ is still bound"
 }
 
 window_zoomed() {
-  [[ $("${AGENT[@]}" display-message -p -t "=$1:" '#{window_zoomed_flag}') == 1 ]]
+  [[ $("${GREENROOM[@]}" display-message -p -t "=$1:" '#{window_zoomed_flag}') == 1 ]]
 }
 
-# On a running agent server, which keeps the bindings of the last open.
+# On a running greenroom server, which keeps the bindings of the last open.
 test_size_freed_keys_get_their_tmux_binding_back() {
   local script
   start_host 'set -g @greenroom-grow-key +' 'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
   open_popup || return
-  script=$(bound_script prefix z "${AGENT[@]}") ||
-    fail "z does not run a plugin script: [$(key_binding prefix z "${AGENT[@]}")]" || return
+  script=$(bound_script prefix z "${GREENROOM[@]}") ||
+    fail "z does not run a plugin script: [$(key_binding prefix z "${GREENROOM[@]}")]" || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -g @greenroom-large-key '' \; set-option -g @greenroom-agents-key C \; \
+  "${HOST[@]}" set-option -g @greenroom-large-key '' \; set-option -g @greenroom-profiles-key C \; \
     set-option -gu @greenroom-grow-key \; set-option -gu @greenroom-shrink-key \; set-option -gu @greenroom-reset-key
   open_popup || return
-  [[ -z $(keys_running "$script" "${AGENT[@]}") ]] ||
-    fail "keys that still run $script: $(keys_running "$script" "${AGENT[@]}")" || return
-  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] || fail "prefix z: [$(key_binding prefix z "${AGENT[@]}")]" || return
-  [[ $(key_binding prefix c "${AGENT[@]}") == *'new-window'* ]] || fail "prefix c: [$(key_binding prefix c "${AGENT[@]}")]" || return
-  [[ $(key_binding prefix - "${AGENT[@]}") == *'delete-buffer'* ]] || fail "prefix -: [$(key_binding prefix - "${AGENT[@]}")]" || return
-  [[ $(key_binding prefix = "${AGENT[@]}") == *'choose-buffer -Z'* ]] || fail "prefix =: [$(key_binding prefix = "${AGENT[@]}")]" || return
-  ! is_bound prefix + "${AGENT[@]}" || fail "+ is still bound" || return
-  [[ " $(agent_bound) " != *' prefix:z '* ]] || fail "z still in @greenroom_bound: $(agent_bound)" || return
-  "${AGENT[@]}" split-window -d -t =main: 'sleep 600'
+  [[ -z $(keys_running "$script" "${GREENROOM[@]}") ]] ||
+    fail "keys that still run $script: $(keys_running "$script" "${GREENROOM[@]}")" || return
+  [[ $(key_binding prefix z "${GREENROOM[@]}") == *'resize-pane -Z'* ]] || fail "prefix z: [$(key_binding prefix z "${GREENROOM[@]}")]" || return
+  [[ $(key_binding prefix c "${GREENROOM[@]}") == *'new-window'* ]] || fail "prefix c: [$(key_binding prefix c "${GREENROOM[@]}")]" || return
+  [[ $(key_binding prefix - "${GREENROOM[@]}") == *'delete-buffer'* ]] || fail "prefix -: [$(key_binding prefix - "${GREENROOM[@]}")]" || return
+  [[ $(key_binding prefix = "${GREENROOM[@]}") == *'choose-buffer -Z'* ]] || fail "prefix =: [$(key_binding prefix = "${GREENROOM[@]}")]" || return
+  ! is_bound prefix + "${GREENROOM[@]}" || fail "+ is still bound" || return
+  [[ " $(greenroom_bound) " != *' prefix:z '* ]] || fail "z still in @greenroom_bound: $(greenroom_bound)" || return
+  "${GREENROOM[@]}" split-window -d -t =main: 'sleep 600'
   press C-a z
   wait_for window_zoomed main || fail "prefix z did not zoom the pane" || return
 
   # Moving the large key to another key gives z back too.
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
-  "${HOST[@]}" set-option -gu @greenroom-large-key \; set-option -gu @greenroom-agents-key
+  "${HOST[@]}" set-option -gu @greenroom-large-key \; set-option -gu @greenroom-profiles-key
   open_popup || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:z ' ]] ||
-    fail "keys that run $script with the default: $(keys_running "$script" "${AGENT[@]}")" || return
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:z ' ]] ||
+    fail "keys that run $script with the default: $(keys_running "$script" "${GREENROOM[@]}")" || return
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
   "${HOST[@]}" set-option -g @greenroom-large-key Z
   open_popup || return
-  [[ $(keys_running "$script" "${AGENT[@]}") == 'prefix:Z ' ]] ||
-    fail "keys that run $script with Z: $(keys_running "$script" "${AGENT[@]}")" || return
-  [[ $(key_binding prefix z "${AGENT[@]}") == *'resize-pane -Z'* ]] ||
-    fail "prefix z after moving the large key: [$(key_binding prefix z "${AGENT[@]}")]"
-}
-
-test_size_agent_menu_ignores_the_size_key_options() {
-  start_host "set -g @greenroom-agents 'claude large grow shrink reset'" \
-    'set -g @greenroom-large-key Z' 'set -g @greenroom-grow-key +' \
-    'set -g @greenroom-shrink-key -' 'set -g @greenroom-reset-key ='
-  open_popup || return
-  open_agent_menu || return
-  wait_for menu_is 'claude(c) large(l) grow(r) shrink(s) reset(e)' || fail "menu: [$(menu_items)]" || return
-  press q
-  wait_for menu_closed 'new agent' || fail "agent menu did not close" || return
-  size_key + 90% 90%
+  [[ $(keys_running "$script" "${GREENROOM[@]}") == 'prefix:Z ' ]] ||
+    fail "keys that run $script with Z: $(keys_running "$script" "${GREENROOM[@]}")" || return
+  [[ $(key_binding prefix z "${GREENROOM[@]}") == *'resize-pane -Z'* ]] ||
+    fail "prefix z after moving the large key: [$(key_binding prefix z "${GREENROOM[@]}")]"
 }
 
 test_size_persists_across_close_and_reopen() {
@@ -1411,7 +1416,7 @@ test_size_resets_when_the_host_server_restarts() {
   wait_for host_server_gone || fail "host server still running" || return
   launch_host 'set -g @greenroom-grow-key +'
   open_popup || return
-  [[ $(pane_field main claude '#{pane_id}') == "$pane" ]] || fail "agent pane changed across the host restart" || return
+  [[ $(pane_field main claude '#{pane_id}') == "$pane" ]] || fail "claude pane changed across the host restart" || return
   wait_for inner_is "$(inner_for 80% 80%)" || fail "opened at $(inner_sizes) after a host restart"
 }
 
@@ -1429,7 +1434,7 @@ test_size_send_opens_at_the_grown_size() {
   press C-a S
   wait_for popup_on main || fail "popup did not open" || return
   wait_for inner_is "$grown" || fail "send opened at $(inner_sizes), expected $grown" || return
-  wait_for agent_pane_has main 'SIZE-SEND-7' || fail "screen did not reach the agent" || return
+  wait_for active_pane_has main 'SIZE-SEND-7' || fail "screen did not reach the pane" || return
   [[ -z $(host_buffers) ]] || fail "host buffers left: $(host_buffers)"
 }
 
@@ -1446,24 +1451,24 @@ test_size_reopen_keeps_the_workspace_and_its_origin() {
   [[ $(workspace_origin main) == "$ORIGIN" ]] || fail "main origin after large: $(workspace_origin main)" || return
 
   # A workspace with an origin of its own, as if opened from another pane.
-  "${AGENT[@]}" new-session -d -s two -n claude 'sleep 600' \; \
+  "${GREENROOM[@]}" new-session -d -s two -n claude 'sleep 600' \; \
     set-option -t =two: @greenroom_origin "${two%;}\\;"
   [[ $(workspace_origin two) == "$two" ]] || fail "test setup: origin of two: $(workspace_origin two)" || return
-  panes=$(agent_panes two)
-  client=$("${AGENT[@]}" list-clients -F '#{client_name}')
-  "${AGENT[@]}" switch-client -c "$client" -t =two
-  wait_for popup_on two || fail "client not on two: $(agent_client_session)" || return
+  panes=$(workspace_panes two)
+  client=$("${GREENROOM[@]}" list-clients -F '#{client_name}')
+  "${GREENROOM[@]}" switch-client -c "$client" -t =two
+  wait_for popup_on two || fail "client not on two: $(greenroom_client_session)" || return
   # As if another host client had opened main since.
-  "${AGENT[@]}" set-option -g @greenroom_last main
+  "${GREENROOM[@]}" set-option -g @greenroom_last main
   press C-a z
   wait_for inner_is "$(inner_for 80% 80%)" || fail "after large off: $(inner_sizes)" || return
-  popup_on two || fail "re-opened on [$(agent_client_session)]" || return
-  [[ $(agent_panes two) == "$panes" ]] || fail "panes of two: $(agent_panes two), were $panes" || return
+  popup_on two || fail "re-opened on [$(greenroom_client_session)]" || return
+  [[ $(workspace_panes two) == "$panes" ]] || fail "panes of two: $(workspace_panes two), were $panes" || return
   [[ $(workspace_origin two) == "$two" ]] || fail "origin of two: $(workspace_origin two)" || return
   [[ $(workspace_origin main) == "$ORIGIN" ]] || fail "origin of main: $(workspace_origin main)" || return
-  open_agent_menu || return
+  open_profile_menu || return
   press o
-  wait_for has_window two codex || fail "codex window not created: $(agent_windows two)" || return
+  wait_for has_window two codex || fail "codex window not created: $(workspace_windows two)" || return
   [[ $(pane_field two codex '#{pane_current_path}') == "$two" ]] ||
     fail "codex cwd: $(pane_field two codex '#{pane_current_path}')"
 }
@@ -1490,7 +1495,7 @@ test_size_inner_client_records_its_host_client() {
     fail "records after reopening: [$(host_client_records)], inner client $pid"
 }
 
-# The size keys are bound for every client of the agent server. One attached
+# The size keys are bound for every client of the greenroom server. One attached
 # directly has no host client record, and the host client must not get a popup.
 test_size_key_in_a_direct_client_does_nothing() {
   start_host
@@ -1498,14 +1503,14 @@ test_size_key_in_a_direct_client_does_nothing() {
   press C-a g
   wait_for popup_closed || fail "popup still open" || return
   "${HARNESS[@]}" new-session -d -s h2 -x 100 -y 30 \; \
-    respawn-pane -k -t h2 "env -u TMUX tmux -L '$ID-agent' attach-session -t =main"
+    respawn-pane -k -t h2 "env -u TMUX tmux -L '$ID-greenroom' attach-session -t =main"
   wait_for inner_is 100x30 || fail "direct client: inner clients $(inner_sizes)" || return
   "${HARNESS[@]}" send-keys -t h2 C-a z
   # Time for the action to run.
   sleep 0.5
   inner_is 100x30 || fail "inner clients after the size key: $(inner_sizes)" || return
   [[ -z $(host_state large) ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
-  ! screen_has ' agents ' || fail "a popup opened on the host client" || return
+  ! screen_has ' greenroom ' || fail "a popup opened on the host client" || return
   no_pane_in_mode || fail "a job reported an error: $(pane_modes | tr '\n' ',')"
 }
 
@@ -1523,7 +1528,7 @@ test_size_keys_typed_during_a_reopen_stay_in_the_popup() {
     i=$((i + 1))
   done
   wait_for inner_is "$(inner_for 95% 95%)" || fail "large popup: $(inner_sizes)" || return
-  wait_for agent_pane_has main QQ || fail "keys did not reach the agent" || return
+  wait_for active_pane_has main QQ || fail "keys did not reach the pane" || return
   host_pane_filled host: ||
     fail "keys reached the host pane: $("${HOST[@]}" capture-pane -p -t host: | grep -vx 'xx*' | head -3)"
 }
@@ -1543,8 +1548,8 @@ test_size_action_reopens_on_the_client_showing_the_popup() {
 
   "${HARNESS[@]}" send-keys -t h2 C-a g
   wait_for inner_is "$(inner_for 80% 80% h2)" || fail "second client popup: $(inner_sizes)" || return
-  wait_for screen_of_has h2 ' agents ' || fail "no popup on the second client" || return
-  ! screen_has ' agents ' || fail "popup on the first client too" || return
+  wait_for screen_of_has h2 ' greenroom ' || fail "no popup on the second client" || return
+  ! screen_has ' greenroom ' || fail "popup on the first client too" || return
   # client_activity counts seconds. Afterwards the first client is the most
   # recently active, which a guess from activity would pick.
   sleep 1.1
@@ -1557,19 +1562,19 @@ test_size_action_reopens_on_the_client_showing_the_popup() {
   "${HARNESS[@]}" send-keys -t h2 C-a z
   wait_for inner_is "$b_large" || fail "after large on the second client: inner clients $(inner_sizes), expected $b_large" || return
   wait_for popup_framed h2 "${b_large#*x}" || fail "second client popup has no border or no margin" || return
-  ! screen_has ' agents ' || fail "a popup opened on the first client" || return
+  ! screen_has ' greenroom ' || fail "a popup opened on the first client" || return
   [[ $(workspace_origin main) == "$b_dir" ]] || fail "origin: $(workspace_origin main)" || return
 
   # Both host clients show a popup; each action must find its own.
   b_pid=$(inner_pids)
   press C-a g
   wait_for inner_is "$a_large" "$b_large" || fail "with two popups: inner clients $(inner_sizes)" || return
-  wait_for screen_has ' agents ' || fail "no popup on the first client" || return
+  wait_for screen_has ' greenroom ' || fail "no popup on the first client" || return
   press C-a z
   wait_for inner_is "$a_normal" "$b_large" ||
     fail "after large off on the first client: inner clients $(inner_sizes), expected $a_normal $b_large" || return
   inner_pids | grep -qx "$b_pid" || fail "the second client's popup was re-opened" || return
-  screen_of_has h2 ' agents ' || fail "the second client lost its popup"
+  screen_of_has h2 ' greenroom ' || fail "the second client lost its popup"
 }
 
 # --- runner ------------------------------------------------------------------

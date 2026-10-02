@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs in the agent server from hooks. Copies the list of agents with a bell
-# nobody has seen yet to the host's @greenroom_alert, and announces new bells
-# on the host clients.
+# Runs in the greenroom server from hooks. Copies the list of windows with a
+# bell nobody has seen yet to the host's @greenroom_alert, and announces new
+# bells on the host clients.
 #
 #   alert.sh refresh
 #   alert.sh bell <window-id>

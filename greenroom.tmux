@@ -14,7 +14,8 @@ bind_key() {
 
 main() {
   local root_key send_key open send binding
-  # The agent server can be pointed at a config that loads this plugin again.
+  # The greenroom server can be pointed at a config that loads this plugin
+  # again.
   if [[ -n $(get_tmux_option @greenroom_server '') ]]; then
     return
   fi

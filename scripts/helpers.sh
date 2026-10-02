@@ -4,7 +4,8 @@
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(dirname "$SCRIPTS_DIR")"
 FIELD_SEPARATOR=$'\037'
-# Carries text sent to an agent: a host buffer first, then an agent server one.
+# Carries text sent to the popup: a host buffer first, then a greenroom server
+# one.
 SEND_BUFFER=greenroom_send
 
 get_tmux_option() {
@@ -74,7 +75,7 @@ take_pending_name() {
   sanitize_name "${name%"$FIELD_SEPARATOR"}"
 }
 
-# The shell command a window runs to start an agent.
-agent_command() {
-  printf '%s %s' "$(quote "$SCRIPTS_DIR/run-agent.sh")" "$(quote "$1")"
+# The shell command a window runs to start a profile.
+profile_command() {
+  printf '%s %s' "$(quote "$SCRIPTS_DIR/run-profile.sh")" "$(quote "$1")"
 }
