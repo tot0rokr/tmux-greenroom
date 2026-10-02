@@ -540,11 +540,12 @@ open_profile_menu() {
   wait_for screen_has ' profiles ' || fail "profile menu not shown"
 }
 
-# Prints the profile menu as drawn: "name(key)" per item, "|" per separator
-# line, "<blank>" per empty row. Box characters depend on the locale, so rows
-# are found by the columns of the top border.
+# menu_items [title]: prints the menu with the title (default the profile
+# menu) as drawn: "name(key)" per item, "|" per separator line, "<blank>" per
+# empty row. Box characters depend on the locale, so rows are found by the
+# columns of the top border.
 menu_items() {
-  local title=' profiles ' lines=() items=() line i top=-1
+  local title=${1:-' profiles '} lines=() items=() line i top=-1
   local before after edge tail left width bar row inner
   local keyed='^ *(.*[^ ]) +\(([^()]+)\) *$' plain='^ *(.*[^ ]) *$'
   while IFS= read -r line; do
@@ -756,21 +757,22 @@ host_bound() {
 # neither key changes the other. grow has no profile key, so it takes an
 # automatic shortcut rather than the + of @greenroom-grow-key.
 test_profile_menu_names_of_plugin_keys_take_their_profile_keys() {
-  start_host "set -g @greenroom-profiles 'root send send-pane profiles workspaces large grow shrink reset'" \
+  start_host "set -g @greenroom-profiles 'root send send-pane profiles workspaces large grow shrink reset commands'" \
     'set -g @greenroom-profile-root-key 1' 'set -g @greenroom-profile-send-key 2' \
     'set -g @greenroom-profile-send-pane-key 3' 'set -g @greenroom-profile-profiles-key 4' \
     'set -g @greenroom-profile-workspaces-key 5' 'set -g @greenroom-profile-large-key 6' \
     'set -g @greenroom-profile-shrink-key 8' 'set -g @greenroom-profile-reset-key 9' \
+    'set -g @greenroom-profile-commands-key 7' \
     "set -g @greenroom-profile-root-cmd '\"$WORK_DIR/stub-agent\" root'" \
     'set -g @greenroom-root-key M-r' 'set -g @greenroom-grow-key +'
   [[ $(host_bound) == ' prefix:g root:M-r prefix:G copy-mode:a copy-mode-vi:a prefix:S' ]] ||
     fail "host keys: [$(host_bound)]" || return
   open_popup || return
-  [[ $(greenroom_bound) == ' prefix:C-a prefix:g root:M-r prefix:G prefix:c prefix:z prefix:+' ]] ||
+  [[ $(greenroom_bound) == ' prefix:C-a prefix:g root:M-r prefix:G prefix:c prefix:M prefix:z prefix:+' ]] ||
     fail "greenroom server keys: [$(greenroom_bound)]" || return
   open_profile_menu || return
   # g is reserved, so grow gets r.
-  wait_for menu_is 'root(1) send(2) send-pane(3) profiles(4) workspaces(5) large(6) grow(r) shrink(8) reset(9)' ||
+  wait_for menu_is 'root(1) send(2) send-pane(3) profiles(4) workspaces(5) large(6) grow(r) shrink(8) reset(9) commands(7)' ||
     fail "menu: [$(menu_items)]" || return
   press 1
   wait_for screen_has "STUB root in $ORIGIN" || fail "root profile not run" || return
@@ -952,12 +954,13 @@ bound_script() {
 }
 
 # keys_running <text> <tmux command...>: "table:key" of every binding whose
-# command contains the text, sorted.
+# command contains the text, sorted. A menu, such as the command menu with its
+# size items, does not count.
 keys_running() {
   local text=$1
   shift
   "$@" list-keys 2>/dev/null | awk -v text="$text" '
-    index($0, text) { for (i = 1; i < NF; i++) if ($i == "-T") { print $(i + 1) ":" $(i + 2); break } }' |
+    index($0, text) { for (i = 1; i < NF; i++) if ($i == "-T") { if ($(i + 3) != "display-menu") print $(i + 1) ":" $(i + 2); break } }' |
     LC_ALL=C sort | tr '\n' ' '
 }
 
@@ -1032,14 +1035,20 @@ popup_framed() {
 # size_key <key> <width> <height>: presses a size key inside the popup, and
 # waits for the popup to come back at that normal size.
 size_key() {
+  press C-a "$1"
+  normal_size_is "after $1" "$2" "$3"
+}
+
+# normal_size_is <step> <width> <height>: waits for the popup to come back at
+# that normal size.
+normal_size_is() {
   local expected
   expected=$(inner_for "$2" "$3")
-  press C-a "$1"
   wait_for inner_is "$expected" ||
-    fail "after $1: inner clients $(inner_sizes), expected $expected ($2 x $3)" || return
+    fail "$1: inner clients $(inner_sizes), expected $expected ($2 x $3)" || return
   [[ $(host_state width) == "$2" && $(host_state height) == "$3" ]] ||
-    fail "after $1: size state [$(host_state width)] x [$(host_state height)], expected $2 x $3" || return
-  [[ $(host_state large) != 1 ]] || fail "after $1: still large"
+    fail "$1: size state [$(host_state width)] x [$(host_state height)], expected $2 x $3" || return
+  [[ $(host_state large) != 1 ]] || fail "$1: still large"
 }
 
 # size_key_is_a_no_op <key> <width> <height>: the size is at a limit already.
@@ -1611,11 +1620,12 @@ use_second_popup() {
     fail "test setup: display-message -c $A_INNER takes the values of $(display_message_client "$A_INNER"), not $B_INNER"
 }
 
+# open_two_popups [extra host.conf lines...]
 # The first host client (harness h) shows main, from ORIGIN, and the second
 # (h2) shows two, from its own directory. Sets A_INNER and B_INNER.
 open_two_popups() {
   mkdir -p "$WORK_DIR/client-b"
-  start_host
+  start_host "$@"
   start_second_client "$WORK_DIR/client-b" || fail "second host client did not start" || return
   open_popup || return
   "${GREENROOM[@]}" new-session -d -s two -n claude 'sleep 600' \; set-option -g @greenroom_last two
@@ -1745,6 +1755,651 @@ test_workspace_menu_shows_a_name_with_a_literal_separator_escape() {
   press x
   wait_for screen_has "kill workspace $printed?" ||
     fail "confirmation: $(screen | grep -F 'kill workspace')"
+}
+
+# --- command menu ------------------------------------------------------------
+
+# The default @greenroom-commands as drawn, and a list of every built-in id.
+DEFAULT_COMMAND_MENU='Profiles(c) Workspaces(w) | Large popup(z) Grow(+) Shrink(-) Reset size(=) | Hide popup(h)'
+ALL_COMMANDS='profiles workspaces large grow shrink reset hide new-workspace rename-workspace kill-workspace kill-window'
+DEFAULT_PROFILE_MENU='claude(c) codex(o) missing(m) | shell(s)'
+
+# menu_shown <title> [harness session]: a menu with the title is drawn. The
+# title sits in the top border, between two border characters; the status line
+# may show the same word.
+menu_shown() {
+  local line before after
+  while IFS= read -r line; do
+    [[ $line == *"$1"* ]] || continue
+    before=${line%%"$1"*}
+    after=${line#*"$1"}
+    [[ -n $before && -n $after ]] || continue
+    before=${before:${#before}-1}
+    [[ $before != ' ' && $before == "${after:0:1}" ]] && return 0
+  done < <("${HARNESS[@]}" capture-pane -p -t "${2:-h}")
+  return 1
+}
+
+command_menu_closed() {
+  ! menu_shown ' commands ' "${1:-h}"
+}
+
+open_command_menu() {
+  press C-a M
+  wait_for menu_shown ' commands ' || fail "command menu not shown"
+}
+
+command_menu_is() {
+  [[ $(menu_items ' commands ') == "$1" ]]
+}
+
+command_menu() {
+  menu_items ' commands '
+}
+
+greenroom_option() {
+  "${GREENROOM[@]}" show-option -gqv "$1" 2>/dev/null
+}
+
+greenroom_option_is() {
+  [[ $(greenroom_option "$1") == "$2" ]]
+}
+
+pane_count_is() {
+  [[ $("${GREENROOM[@]}" list-panes -t "=$1:" -F x 2>/dev/null | grep -c x) == "$2" ]]
+}
+
+inner_pid_on() {
+  "${GREENROOM[@]}" list-clients -F '#{client_session} #{client_pid}' 2>/dev/null |
+    awk -v s="$1" '$1 == s { print $2 }'
+}
+
+# The list-keys line of a binding, split into table, key and command.
+BINDING_LINE='^bind-key +(-[a-zA-Z] +)*-T +([^ ]+) +([^ ]+) +(.*)$'
+
+# binding_command <table> <key> <tmux command...>: the command the key runs.
+binding_command() {
+  local line
+  line=$(key_binding "$@")
+  [[ $line =~ $BINDING_LINE ]] || return 1
+  printf '%s' "${BASH_REMATCH[4]}"
+}
+
+# keys_bound_to <command> <tmux command...>: "table:key " of every binding that
+# runs exactly this command.
+keys_bound_to() {
+  local command=$1 line found=''
+  shift
+  while IFS= read -r line; do
+    if [[ $line =~ $BINDING_LINE && ${BASH_REMATCH[4]} == "$command" ]]; then
+      found+="${BASH_REMATCH[2]}:${BASH_REMATCH[3]} "
+    fi
+  done < <("$@" list-keys 2>/dev/null)
+  printf '%s' "$found"
+}
+
+# menu_size_key <key> <width> <height>: picks a size item of the command menu,
+# and waits for the popup to come back at that normal size.
+menu_size_key() {
+  open_command_menu || return
+  press "$1"
+  normal_size_is "after menu item $1" "$2" "$3"
+}
+
+test_command_menu_default_items_open_with_M_and_close_with_q() {
+  start_host
+  open_popup || return
+  [[ $(key_binding prefix M "${HOST[@]}") == *'select-pane -M'* ]] ||
+    fail "host prefix M: [$(key_binding prefix M "${HOST[@]}")]" || return
+  [[ $(binding_command prefix M "${GREENROOM[@]}") != 'select-pane -M' ]] ||
+    fail "greenroom server prefix M is still tmux's select-pane -M" || return
+  [[ " $(greenroom_bound) " == *' prefix:M '* ]] || fail "M not in @greenroom_bound: $(greenroom_bound)" || return
+  ! menu_shown ' commands ' || fail "command menu shown before the key" || return
+  open_command_menu || return
+  wait_for command_menu_is "$DEFAULT_COMMAND_MENU" || fail "menu: [$(command_menu)]" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close" || return
+  popup_on main || fail "popup on [$(greenroom_client_session)] after closing the menu"
+}
+
+test_command_menu_shows_every_built_in_id_with_its_label_and_key() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Profiles(c) Workspaces(w) Large popup(z) Grow(+) Shrink(-) Reset size(=) Hide popup(h) New workspace(n) Rename workspace(r) Kill workspace(x) Kill window(X)' ||
+    fail "menu: [$(command_menu)]"
+}
+
+test_command_menu_profiles_and_workspaces_open_their_menus() {
+  start_host
+  open_popup || return
+  open_command_menu || return
+  press c
+  wait_for menu_is "$DEFAULT_PROFILE_MENU" || fail "profile menu: [$(menu_items)]" || return
+  command_menu_closed || fail "command menu still shown" || return
+  press o
+  wait_for has_window main codex || fail "codex window not created: $(workspace_windows main)" || return
+  [[ $(pane_field main codex '#{pane_current_path}') == "$ORIGIN" ]] ||
+    fail "codex cwd: $(pane_field main codex '#{pane_current_path}')" || return
+  open_command_menu || return
+  press w
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  screen_has 'main (2) *' || fail "current workspace not marked: $(screen | grep -F 'main (')" || return
+  command_menu_closed || fail "command menu still shown" || return
+  press q
+  wait_for menu_closed 'New workspace' || fail "workspace menu did not close"
+}
+
+# The item draws the menu of prefix + c: its centred title and a name that
+# starts with '-' keep their styles.
+test_command_menu_profiles_item_draws_the_menu_of_the_profiles_key() {
+  local border
+  start_host "set -g @greenroom-profiles '-dash claude'" \
+    "set -g @greenroom-profile--dash-cmd '\"$WORK_DIR/stub-agent\" dash'"
+  open_popup || return
+  open_profile_menu || return
+  wait_for menu_is '-dash(d) claude(c)' || fail "menu of prefix c: [$(menu_items)]" || return
+  border=$(screen | grep -F ' profiles ')
+  press q
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
+  open_command_menu || return
+  press c
+  wait_for menu_is '-dash(d) claude(c)' || fail "menu of the item: [$(menu_items)]" || return
+  [[ $(screen | grep -F ' profiles ') == "$border" ]] ||
+    fail "top border [$(screen | grep -F ' profiles ')], with prefix c [$border]" || return
+  press d
+  wait_for windows_are main 'claude -dash ' || fail "windows: $(workspace_windows main)"
+}
+
+test_command_menu_size_items_resize_the_popup() {
+  local normal large
+  start_host
+  normal=$(inner_for 80% 80%)
+  large=$(inner_for 95% 95%)
+  open_popup || return
+  wait_for inner_is "$normal" || fail "first popup: $(inner_sizes)" || return
+  open_command_menu || return
+  press z
+  wait_for inner_is "$large" || fail "large: inner clients $(inner_sizes), expected $large" || return
+  [[ $(host_state large) == 1 ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
+  popup_on main || fail "popup on [$(greenroom_client_session)]" || return
+  open_command_menu || return
+  press z
+  wait_for inner_is "$normal" || fail "large off: inner clients $(inner_sizes), expected $normal" || return
+  [[ $(host_state large) != 1 ]] || fail "still large" || return
+  menu_size_key + 90% 90% || return
+  menu_size_key - 80% 80% || return
+  menu_size_key - 70% 70% || return
+  open_command_menu || return
+  press z
+  wait_for inner_is "$large" || fail "large again: inner clients $(inner_sizes), expected $large" || return
+  open_command_menu || return
+  press =
+  wait_for inner_is "$normal" || fail "after reset: inner clients $(inner_sizes), expected $normal" || return
+  [[ -z "$(host_state width)$(host_state height)$(host_state large)" ]] ||
+    fail "state left after reset: [$(host_state width)] [$(host_state height)] [$(host_state large)]"
+}
+
+# tmux draws no menu taller than its client. The default menu takes 11 rows: a
+# 30% popup of the harness terminal has 11 inside its border, a 20% one 7.
+test_command_menu_shrink_stops_while_the_menu_fits() {
+  start_host 'set -g @greenroom-width 40%' 'set -g @greenroom-height 40%'
+  open_popup || return
+  wait_for inner_is "$(inner_for 40% 40%)" || fail "first popup: $(inner_sizes)" || return
+  menu_size_key - 30% 30% || return
+  open_command_menu || return
+  press -
+  # Time for the action to run.
+  sleep 0.5
+  inner_is "$(inner_for 30% 30%)" || fail "after the last Shrink: inner clients $(inner_sizes)" || return
+  [[ $(host_state width) == 30% && $(host_state height) == 30% ]] ||
+    fail "size state after the last Shrink: [$(host_state width)] x [$(host_state height)]" || return
+  open_command_menu || return
+  press =
+  wait_for inner_is "$(inner_for 40% 40%)" || fail "after reset: inner clients $(inner_sizes)"
+}
+
+test_command_menu_hide_closes_the_popup_and_keeps_the_workspace() {
+  local pid
+  start_host
+  open_popup || return
+  pid=$(pane_field main claude '#{pane_pid}')
+  open_command_menu || return
+  press h
+  wait_for popup_closed || fail "popup still open" || return
+  has_window main claude || fail "claude window gone" || return
+  kill -0 "$pid" 2>/dev/null || fail "claude process $pid died" || return
+  open_popup || return
+  [[ $(pane_field main claude '#{pane_pid}') == "$pid" ]] || fail "claude pane changed"
+}
+
+test_command_menu_new_workspace_prompts_and_switches() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  open_command_menu || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text 'from menu'
+  press Enter
+  wait_for popup_on from_menu || fail "client not on from_menu: $(greenroom_client_session)" || return
+  windows_are from_menu 'claude ' || fail "windows: $(workspace_windows from_menu)" || return
+  [[ $(pane_field from_menu claude '#{pane_current_path}') == "$ORIGIN" ]] ||
+    fail "new workspace cwd: $(pane_field from_menu claude '#{pane_current_path}')" || return
+  windows_are main 'claude ' || fail "main windows: $(workspace_windows main)"
+}
+
+test_command_menu_renames_the_workspace() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  open_command_menu || return
+  press r
+  wait_for screen_has 'rename workspace: main' || fail "rename prompt not shown: $(screen | grep -F 'rename')" || return
+  press C-u
+  type_text 'v2.next'
+  press Enter
+  wait_for popup_on v2_next || fail "client not on v2_next: $(greenroom_client_session)" || return
+  ! "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main still exists" || return
+  [[ $(greenroom_option @greenroom_last) == v2_next ]] || fail "last workspace: [$(greenroom_option @greenroom_last)]"
+}
+
+test_command_menu_kills_the_workspace_after_a_confirmation() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  # With a second window, killing only the current window would leave main.
+  "${GREENROOM[@]}" new-session -d -s other 'sleep 600' \; new-window -d -t =main: 'sleep 600'
+  open_command_menu || return
+  press x
+  wait_for screen_has 'kill workspace main?' || fail "confirmation not shown: $(screen | grep -F '(y/n)')" || return
+  wait_for no_greenroom_jobs || fail "jobs while the confirmation is shown: $(greenroom_jobs)" || return
+  "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main killed before the answer" || return
+  press n
+  wait_for menu_closed '(y/n)' || fail "confirmation still shown after n" || return
+  # Time for a job to report a failure.
+  sleep 0.5
+  no_pane_in_mode || fail "a job reported an error after n: $(pane_modes | tr '\n' ',')" || return
+  "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main killed after n" || return
+  popup_on main || fail "popup on [$(greenroom_client_session)] after n" || return
+  open_command_menu || return
+  press x
+  wait_for screen_has 'kill workspace main?' || fail "confirmation not shown the second time" || return
+  press y
+  wait_for popup_closed || fail "popup still open: client on [$(greenroom_client_session)]" || return
+  ! "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main still exists" || return
+  "${GREENROOM[@]}" has-session -t =other || fail "other workspace is gone"
+}
+
+# A job waiting for the answer would hang when the popup goes away first, and
+# keep the greenroom server running after its last workspace.
+test_command_menu_prompt_leaves_no_job_when_the_popup_goes() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  open_command_menu || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  wait_for no_greenroom_jobs || fail "jobs while the prompt is shown: $(greenroom_jobs)" || return
+  "${GREENROOM[@]}" kill-session -t =main
+  wait_for popup_closed || fail "popup still open" || return
+  wait_for greenroom_server_gone || fail "greenroom server still running, jobs: $(greenroom_jobs)"
+}
+
+test_command_menu_kills_the_current_window_after_a_confirmation() {
+  start_host "set -g @greenroom-commands '$ALL_COMMANDS'"
+  open_popup || return
+  "${GREENROOM[@]}" new-window -t =main: -n second 'sleep 600'
+  [[ $(pane_field main '' '#{window_name}') == second ]] ||
+    fail "test setup: current window $(pane_field main '' '#{window_name}')" || return
+  open_command_menu || return
+  press X
+  wait_for screen_has '(y/n)' || fail "confirmation not shown" || return
+  windows_are main 'claude second ' || fail "windows before the answer: $(workspace_windows main)" || return
+  press n
+  wait_for menu_closed '(y/n)' || fail "confirmation still shown after n" || return
+  windows_are main 'claude second ' || fail "windows after n: $(workspace_windows main)" || return
+  open_command_menu || return
+  press X
+  wait_for screen_has '(y/n)' || fail "confirmation not shown the second time" || return
+  press y
+  wait_for windows_are main 'claude ' || fail "windows after y: $(workspace_windows main)" || return
+  popup_on main || fail "popup on [$(greenroom_client_session)]"
+}
+
+test_command_menu_follows_the_list_order() {
+  start_host "set -g @greenroom-commands 'hide | reset large | profiles'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Hide popup(h) | Reset size(=) Large popup(z) | Profiles(c)' || fail "menu: [$(command_menu)]" || return
+  press c
+  wait_for menu_is "$DEFAULT_PROFILE_MENU" || fail "profile menu: [$(menu_items)]"
+}
+
+test_command_menu_drops_extra_separators_and_skipped_ids() {
+  start_host "set -g @greenroom-commands '| | hide  profiles | | o.k | large | | bad#id'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Hide popup(h) Profiles(c) | Large popup(z)' || fail "menu: [$(command_menu)]"
+}
+
+test_command_menu_removed_items_are_absent() {
+  start_host "set -g @greenroom-commands 'profiles hide'"
+  open_popup || return
+  wait_for inner_is "$(inner_for 80% 80%)" || fail "first popup: $(inner_sizes)" || return
+  open_command_menu || return
+  wait_for command_menu_is 'Profiles(c) Hide popup(h)' || fail "menu: [$(command_menu)]" || return
+  # The keys of the removed large and workspaces items.
+  press z
+  press w
+  # Time for an action to run.
+  sleep 0.5
+  menu_shown ' commands ' || fail "the command menu closed" || return
+  ! screen_has 'New workspace' || fail "w opened the workspace menu" || return
+  inner_is "$(inner_for 80% 80%)" || fail "z resized the popup: $(inner_sizes)" || return
+  [[ -z $(host_state large) ]] || fail "@greenroom_size_large: [$(host_state large)]" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close"
+}
+
+test_command_menu_empty_list_shows_a_disabled_item() {
+  start_host "set -g @greenroom-commands ''"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'no commands configured' || fail "menu: [$(command_menu)]" || return
+  menu_item_dim 'no commands configured' || fail "item is not disabled" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -g @greenroom-commands '| |'
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'no commands configured' || fail "menu of separators: [$(command_menu)]" || return
+  menu_item_dim 'no commands configured' || fail "item is not disabled with only separators"
+}
+
+# A -run value is format-expanded once, with the menu's client as context.
+test_command_menu_runs_a_custom_command() {
+  local client
+  start_host "set -g @greenroom-commands 'tgr-set split'" \
+    "set -g @greenroom-command-tgr-set-run 'set-option -g @tgr-ran \"#{session_name} ## #### #{client_name}\"'" \
+    "set -g @greenroom-command-tgr-set-key ';'" \
+    "set -g @greenroom-command-split-run 'split-window -h'"
+  open_popup || return
+  client=$("${GREENROOM[@]}" list-clients -F '#{client_name}')
+  open_command_menu || return
+  # Without a label, an item shows its id.
+  wait_for command_menu_is 'tgr-set(;) split(s)' || fail "menu: [$(command_menu)]" || return
+  # A bare ';' argument would end send-keys.
+  press '\;'
+  wait_for greenroom_option_is @tgr-ran "main # ## $client" || fail "@tgr-ran: [$(greenroom_option @tgr-ran)]" || return
+  wait_for command_menu_closed || fail "command menu still shown" || return
+  pane_count_is main 1 || fail "test setup: panes before split" || return
+  open_command_menu || return
+  press s
+  wait_for pane_count_is main 2 || fail "split-window did not run"
+}
+
+# A disabled first item needs '--' before the items. nine gets n only if the
+# disabled item takes no shortcut.
+test_command_menu_undefined_custom_id_is_disabled() {
+  start_host "set -g @greenroom-commands 'nope profiles nine'" \
+    "set -g @greenroom-command-nine-run 'set-option -g @tgr-nine yes'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'nope(not defined) Profiles(c) nine(n)' || fail "menu: [$(command_menu)]" || return
+  menu_item_dim 'nope (not defined)' || fail "nope is not disabled" || return
+  # The selection starts on the first enabled item, Profiles, so Down reaches
+  # nine. On an enabled nope, Down would reach Profiles.
+  press Down
+  press Enter
+  wait_for greenroom_option_is @tgr-nine yes || fail "Down and Enter did not run nine" || return
+  wait_for command_menu_closed || fail "command menu still shown" || return
+  # Time for an action of nope to run.
+  sleep 0.5
+  windows_are main 'claude ' || fail "windows: $(workspace_windows main)" || return
+  no_pane_in_mode || fail "a job reported an error: $(pane_modes | tr '\n' ',')"
+}
+
+test_command_menu_label_and_key_overrides() {
+  start_host "set -g @greenroom-commands 'profiles hide mark'" \
+    "set -g @greenroom-command-profiles-label '-Profiles-'" \
+    "set -g @greenroom-command-hide-label 'Close it'" \
+    'set -g @greenroom-command-hide-key H' \
+    "set -g @greenroom-command-hide-run 'set-option -g @tgr-hijack yes'" \
+    "set -g @greenroom-command-mark-label 'Mark #S'" \
+    'set -g @greenroom-command-mark-key y' \
+    "set -g @greenroom-command-mark-run 'set-option -g @tgr-mark yes'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is '-Profiles-(c) Close it(H) Mark #S(y)' || fail "menu: [$(command_menu)]" || return
+  press y
+  wait_for greenroom_option_is @tgr-mark yes || fail "@tgr-mark: [$(greenroom_option @tgr-mark)]" || return
+  wait_for command_menu_closed || fail "command menu still shown" || return
+  open_command_menu || return
+  # The default key of hide, replaced by H.
+  press h
+  # Time for an action to run.
+  sleep 0.5
+  menu_shown ' commands ' || fail "h closed the menu" || return
+  popup_on main || fail "h hid the popup" || return
+  press H
+  wait_for popup_closed || fail "H did not hide the popup" || return
+  [[ -z $(greenroom_option @tgr-hijack) ]] || fail "hide ran its -run command" || return
+  open_popup || return
+  open_command_menu || return
+  press c
+  wait_for menu_is "$DEFAULT_PROFILE_MENU" || fail "-Profiles- did not open the profile menu: [$(menu_items)]"
+}
+
+# Default keys of built-in ids and -key values are claimed in list order.
+test_command_menu_second_claim_on_a_key_falls_back() {
+  start_host "set -g @greenroom-commands 'profiles grow kill-workspace kill-window tgr-one tgr-two'" \
+    'set -g @greenroom-command-grow-key c' \
+    'set -g @greenroom-command-kill-workspace-key X' \
+    "set -g @greenroom-command-tgr-one-run 'set-option -g @tgr-one yes'" \
+    'set -g @greenroom-command-tgr-one-key 1' \
+    "set -g @greenroom-command-tgr-two-run 'set-option -g @tgr-two yes'" \
+    'set -g @greenroom-command-tgr-two-key 1'
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Profiles(c) Grow(r) Kill workspace(X) Kill window(i) tgr-one(1) tgr-two(t)' ||
+    fail "menu: [$(command_menu)]" || return
+  press t
+  wait_for greenroom_option_is @tgr-two yes || fail "t did not run tgr-two" || return
+  [[ -z $(greenroom_option @tgr-one) ]] || fail "t ran tgr-one" || return
+  menu_size_key r 90% 90%
+}
+
+test_command_menu_explicit_arrow_keys_fall_back() {
+  # The automatic key of grow skips the r of a later item.
+  start_host "set -g @greenroom-commands 'grow kill-window tgr-arrow tgr-r'" \
+    'set -g @greenroom-command-grow-key Up' \
+    'set -g @greenroom-command-kill-window-key S-Down' \
+    'set -g @greenroom-command-tgr-arrow-key left' \
+    "set -g @greenroom-command-tgr-arrow-run 'set-option -g @tgr-arrow yes'" \
+    'set -g @greenroom-command-tgr-r-key r' \
+    "set -g @greenroom-command-tgr-r-run 'set-option -g @tgr-r yes'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Grow(o) Kill window(i) tgr-arrow(t) tgr-r(r)' || fail "menu: [$(command_menu)]" || return
+  menu_size_key o 90% 90%
+}
+
+test_command_menu_skips_invalid_ids_and_duplicates() {
+  start_host "set -g @greenroom-commands 'hide o.k profiles hide it#S kill-window profiles'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Hide popup(h) Profiles(c) Kill window(X)' || fail "menu: [$(command_menu)]"
+}
+
+test_command_menu_list_changes_apply_on_next_open() {
+  start_host "set -g @greenroom-commands 'profiles hide'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Profiles(c) Hide popup(h)' || fail "first menu: [$(command_menu)]" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -g @greenroom-commands 'hide | profiles' \; set-option -g @greenroom-command-hide-key Y
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is 'Hide popup(Y) | Profiles(c)' || fail "changed menu: [$(command_menu)]" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+  "${HOST[@]}" set-option -gu @greenroom-commands \; set-option -gu @greenroom-command-hide-key
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is "$DEFAULT_COMMAND_MENU" || fail "menu after unsetting the options: [$(command_menu)]"
+}
+
+# Options of command ids have their own prefix and suffix: the plugin key
+# options do not change the menu, and an id may be named like one of them.
+test_command_menu_keys_ignore_the_plugin_key_options() {
+  start_host "set -g @greenroom-commands 'profiles workspaces | large grow shrink reset | hide root'" \
+    'set -g @greenroom-profiles-key C' 'set -g @greenroom-workspaces-key W' \
+    'set -g @greenroom-large-key Z' 'set -g @greenroom-grow-key Y' 'set -g @greenroom-root-key M-r' \
+    "set -g @greenroom-command-root-run 'set-option -g @tgr-root yes'"
+  open_popup || return
+  open_command_menu || return
+  wait_for command_menu_is "$DEFAULT_COMMAND_MENU root(r)" || fail "menu: [$(command_menu)]" || return
+  press c
+  wait_for menu_is "$DEFAULT_PROFILE_MENU" || fail "profile menu: [$(menu_items)]" || return
+  press q
+  wait_for menu_closed ' profiles ' || fail "profile menu did not close" || return
+  open_command_menu || return
+  press w
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  press q
+  wait_for menu_closed 'New workspace' || fail "workspace menu did not close" || return
+  open_command_menu || return
+  press r
+  wait_for greenroom_option_is @tgr-root yes || fail "r did not run the root command" || return
+  wait_for command_menu_closed || fail "command menu still shown" || return
+  press M-r
+  wait_for popup_closed || fail "root key did not close the popup"
+}
+
+test_command_menu_key_option_rebinds_and_frees_the_old_key() {
+  local menu
+  start_host
+  open_popup || return
+  menu=$(binding_command prefix M "${GREENROOM[@]}") || fail "M is not bound" || return
+  [[ $menu != 'select-pane -M' ]] || fail "M runs tmux's select-pane -M" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+
+  "${HOST[@]}" set-option -g @greenroom-commands-key K
+  open_popup || return
+  [[ $(keys_bound_to "$menu" "${GREENROOM[@]}") == 'prefix:K ' ]] ||
+    fail "keys that run the menu with K: [$(keys_bound_to "$menu" "${GREENROOM[@]}")]" || return
+  # tmux binds M itself.
+  [[ $(binding_command prefix M "${GREENROOM[@]}") == 'select-pane -M' ]] ||
+    fail "prefix M with K: [$(key_binding prefix M "${GREENROOM[@]}")]" || return
+  [[ " $(greenroom_bound) " == *' prefix:K '* && " $(greenroom_bound) " != *' prefix:M '* ]] ||
+    fail "@greenroom_bound with K: $(greenroom_bound)" || return
+  press C-a K
+  wait_for command_menu_is "$DEFAULT_COMMAND_MENU" || fail "K menu: [$(command_menu)]" || return
+  press q
+  wait_for command_menu_closed || fail "command menu did not close" || return
+  press C-a M
+  # Time for the menu to open.
+  sleep 0.5
+  command_menu_closed || fail "M still opens the command menu" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+
+  "${HOST[@]}" set-option -g @greenroom-commands-key ''
+  open_popup || return
+  [[ -z $(keys_bound_to "$menu" "${GREENROOM[@]}") ]] ||
+    fail "keys that run the menu with no key: [$(keys_bound_to "$menu" "${GREENROOM[@]}")]" || return
+  ! is_bound prefix K "${GREENROOM[@]}" || fail "K is still bound: [$(key_binding prefix K "${GREENROOM[@]}")]" || return
+  [[ $(binding_command prefix M "${GREENROOM[@]}") == 'select-pane -M' ]] ||
+    fail "prefix M with no key: [$(key_binding prefix M "${GREENROOM[@]}")]" || return
+  [[ " $(greenroom_bound) " != *' prefix:K '* && " $(greenroom_bound) " != *' prefix:M '* ]] ||
+    fail "@greenroom_bound with no key: $(greenroom_bound)" || return
+  press C-a g
+  wait_for popup_closed || fail "popup still open" || return
+
+  "${HOST[@]}" set-option -gu @greenroom-commands-key
+  open_popup || return
+  [[ $(keys_bound_to "$menu" "${GREENROOM[@]}") == 'prefix:M ' ]] ||
+    fail "keys that run the menu with the default: [$(keys_bound_to "$menu" "${GREENROOM[@]}")]"
+}
+
+# Opens the command menu of the first popup and types into the second popup at
+# once, so a menu that a job builds after the key sees the second popup as the
+# most recently active client.
+open_command_menu_while_second_types() {
+  "${HARNESS[@]}" send-keys -t h C-a M \; send-keys -t h2 -l b
+  wait_for menu_shown ' commands ' || fail "command menu not shown on the first client" || return
+  command_menu_closed h2 || fail "command menu shown on the second client" || return
+  use_second_popup
+}
+
+test_command_menu_kills_the_workspace_of_its_own_popup() {
+  open_two_popups "set -g @greenroom-commands 'rename-workspace kill-workspace'" || return
+  # With a second window, killing only the current window would leave main.
+  "${GREENROOM[@]}" new-window -d -t =main: 'sleep 600'
+  open_command_menu_while_second_types || return
+  press x
+  wait_for screen_has 'kill workspace main?' ||
+    fail "confirmation not shown on the first client: $(screen | grep -F '(y/n)')" || return
+  ! screen_of_has h2 '(y/n)' || fail "confirmation shown on the second client" || return
+  press y
+  wait_for popups_on two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  ! "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main still exists" || return
+  "${GREENROOM[@]}" has-session -t =two || fail "two is gone" || return
+  screen_of_has h2 ' greenroom ' || fail "the second client lost its popup"
+}
+
+test_command_menu_renames_the_workspace_of_its_own_popup() {
+  open_two_popups "set -g @greenroom-commands 'rename-workspace kill-workspace'" || return
+  open_command_menu_while_second_types || return
+  press r
+  wait_for screen_has 'rename workspace: main' || fail "rename prompt: $(screen | grep -F 'rename')" || return
+  press C-u
+  type_text 'renamed'
+  press Enter
+  wait_for popups_on renamed two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_on renamed) == "$A_INNER" ]] || fail "renamed is on $(inner_on renamed), not $A_INNER"
+}
+
+test_command_menu_actions_act_in_their_own_popup() {
+  local a_large b_normal b_pid
+  open_two_popups "set -g @greenroom-commands 'where kill-window large hide'" \
+    "set -g @greenroom-command-where-run 'set-option -g @tgr-where \"#{session_name} #{client_name}\"'" || return
+  "${GREENROOM[@]}" new-window -t =main: -n second 'sleep 600' \; new-window -d -t =two: -n other 'sleep 600'
+  a_large=$(inner_for 95% 95% h)
+  b_normal=$(inner_for 80% 80% h2)
+  b_pid=$(inner_pid_on two)
+
+  open_command_menu_while_second_types || return
+  wait_for command_menu_is 'where(w) Kill window(X) Large popup(z) Hide popup(h)' || fail "menu: [$(command_menu)]" || return
+  press w
+  wait_for greenroom_option_is @tgr-where "main $A_INNER" ||
+    fail "@tgr-where: [$(greenroom_option @tgr-where)], expected [main $A_INNER]" || return
+
+  open_command_menu_while_second_types || return
+  press X
+  wait_for screen_has '(y/n)' || fail "confirmation not shown on the first client" || return
+  press y
+  wait_for windows_are main 'claude ' || fail "main windows: $(workspace_windows main)" || return
+  windows_are two 'claude other ' || fail "two windows: $(workspace_windows two)" || return
+
+  open_command_menu_while_second_types || return
+  press z
+  wait_for inner_is "$a_large" "$b_normal" ||
+    fail "after large on the first popup: inner clients $(inner_sizes), expected $a_large $b_normal" || return
+  [[ $(inner_pid_on two) == "$b_pid" ]] || fail "the second popup was re-opened" || return
+  A_INNER=$(inner_on main)
+
+  open_command_menu_while_second_types || return
+  press h
+  wait_for popups_on two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_pid_on two) == "$b_pid" ]] || fail "the second popup was closed or re-opened" || return
+  screen_of_has h2 ' greenroom ' || fail "the second client lost its popup" || return
+  has_window main claude || fail "main lost its window"
 }
 
 # --- runner ------------------------------------------------------------------

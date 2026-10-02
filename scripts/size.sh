@@ -3,7 +3,11 @@
 # and has the host open the popup again at that size, on the host client that
 # shows the given inner client.
 #
-#   size.sh large|grow|shrink|reset <client-pid> <workspace>
+#   size.sh large|grow|shrink|reset <client-pid> <workspace> [rows]
+#
+# A shrink that would leave fewer than rows rows inside the popup does nothing.
+# tmux draws no menu taller than its client, so the command menu passes its
+# own height: its Shrink item never hides the menu that grows the popup back.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 
@@ -37,7 +41,7 @@ set_state() {
 }
 
 main() {
-  local action=$1 pid=$2 workspace=$3 values=() host client origin before step delta reopen
+  local action=$1 pid=$2 workspace=$3 rows=${4:-0} values=() host client origin before step delta reopen
   local large state_width state_height width height client_width client_height
   IFS=$FIELD_SEPARATOR read -r -d '' -a values < <(read_raw_options -t "=$workspace:" \
     @greenroom_host "@greenroom_host_client_$pid" @greenroom_origin)
@@ -70,6 +74,8 @@ main() {
       [[ $action == shrink ]] && delta=$((-delta))
       state_width=$(resize "${state_width:-${width:-80%}}" "$client_width" "$delta")
       state_height=$(resize "${state_height:-${height:-80%}}" "$client_height" "$delta")
+      # The border takes a row at the top and one at the bottom.
+      ((rows && client_height * ${state_height%\%} / 100 - 2 < rows)) && return 0
       large=''
       ;;
     reset)

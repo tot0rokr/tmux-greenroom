@@ -79,7 +79,7 @@
   - 사실: tmux 3.3a `server-client.c`의 `server_client_handle_key`는 key table 조회보다 `overlay_key`를 먼저 호출한다 (조사, 리뷰가 교차 확인).
 - 닫기 키는 host의 열기 키와 같은 키를 greenroom server에서 `detach-client`로 바인딩해 만든다. 같은 키가 열고 닫는 토글이 된다.
 - 바인딩한 키는 양쪽 server의 `@greenroom_bound`에 기록하고, 다음 적용 때 먼저 unbind한다. 키 옵션을 바꿔도 옛 키가 남지 않는다.
-  - greenroom server에서 tmux 기본 바인딩이 있는 `c`, `z`(플러그인 기본 키)와 `-`, `=`(README 예시)는 unbind 대신 tmux 바인딩(`new-window`, `resize-pane -Z`, `delete-buffer`, `choose-buffer -Z`)으로 되돌린다. 그 밖의 키는 greenroom server를 재시작할 때까지 비어 있다.
+  - greenroom server에서 tmux 기본 바인딩이 있는 `c`, `M`, `z`(플러그인 기본 키)와 `-`, `=`(README 예시)는 unbind 대신 tmux 바인딩(`new-window`, `select-pane -M`, `resize-pane -Z`, `delete-buffer`, `choose-buffer -Z`)으로 되돌린다. 그 밖의 키는 greenroom server를 재시작할 때까지 비어 있다.
   - 이유: tmux에는 기본 바인딩 하나를 되살리는 명령이 없다. 처음 바인딩하기 전 값도 읽을 수 없다. 새 greenroom server는 바인딩을 넣는 그 준비 명령 안에서 뜬다.
 
 ### D4. workspace는 session, profile은 window로 띄운다
@@ -180,7 +180,33 @@
   - 기각안: 최근 활성 host client. popup이 떠 있는 동안 host의 `client_activity`가 바뀌지 않아 client가 둘이면 틀린다 (실측 29). session 환경(`update-environment`)은 session마다 마지막 attach 값이라 틀리고, `/proc/<pid>/environ`은 Linux 전용이다.
 - 동시 실행: re-open 중에 친 키는 새 inner client에 한꺼번에 도착한다. 크기 키 둘이 같이 돌면 같은 상태를 읽어 한 단계가 사라져서 (실측 33), `size.sh`는 greenroom server의 `wait-for -L greenroom_size`로 차례를 지킨다.
 - 키: `@greenroom-large-key`(기본 `z`, zoom), `@greenroom-grow-key`, `@greenroom-shrink-key`, `@greenroom-reset-key`(기본 없음 = 바인딩 안 함). popup 안 prefix table에 묶고 `@greenroom_bound`로 관리한다. `z`는 tmux의 pane zoom 키를 대신하므로 `@greenroom-large-key`를 빈 값으로 두면 바인딩하지 않는다. 실행 중인 greenroom server에서 빈 값이나 다른 키로 바꾸면 다음 열기에서 `z`를 tmux zoom으로 되돌린다 (D3).
-- 진입점은 `size.sh <action> <client_pid> <workspace>` 하나다. 다른 UI(메뉴 등)도 같은 명령을 부른다.
+- 진입점은 `size.sh <action> <client_pid> <workspace> [rows]` 하나다. 다른 UI(메뉴 등)도 같은 명령을 부른다. `rows`는 command 메뉴의 `shrink`가 넘기는 메뉴 높이다 (D12).
+
+### D12. command 메뉴는 id 목록 하나로 구성한다
+
+- popup 안 `prefix + M`(`@greenroom-commands-key`)이 command 메뉴를 연다. 항목과 순서는 `@greenroom-commands`의 id 목록이 정한다. 기본값은 `profiles workspaces | large grow shrink reset | hide`다.
+- 목록 문법과 단축키 규칙은 profile 메뉴(D6)와 같고, `attach.sh`의 같은 함수(`menu_entries`, `menu_keys`)를 쓴다.
+  - built-in id의 기본 키(`c w z + - = h n r x X`)도 명시 키로 친다. 목록 순서로 먼저 잡은 항목이 갖고, 뒤 항목과 화살표 키는 자동 규칙으로 간다.
+  - 자동 단축키는 label이 아니라 id에서 고른다. profile 메뉴의 이름 규칙과 같다.
+  - 정의 안 된 id는 비활성 `<id> (not defined)`로 그리고 단축키를 주지 않는다. 뒤 항목의 자동 단축키를 빼앗지 않는다.
+- 메뉴는 profile 메뉴처럼 여는 때마다 `attach.sh`가 만들어 키에 `display-menu`로 직접 바인딩한다.
+  - 이유: 키 바인딩의 `display-menu`는 키를 누른 client와 그 session을 context로 쓴다. 항목 명령의 `#{client_name}`, `#{client_pid}`, `#{session_name}`과 사용자 명령이 직접 바인딩한 키처럼 그 popup에서 돈다 (테스트 `command_menu_actions_act_in_their_own_popup`).
+  - 항목이 option에만 달려 있어 여는 때 만들면 된다. workspace 메뉴처럼 키를 누를 때 job이 메뉴를 만들면 job이 뜨는 동안 늦고, 스크립트의 `display-menu -c`에는 target session을 따로 줘야 한다 (미실측. 실측 23의 command client와 같은 경로).
+- built-in 동작은 같은 일을 하는 키·메뉴의 명령을 그대로 쓴다.
+  - `profiles`: profile 메뉴의 `display-menu` 인자를 명령 한 줄로 이어 붙인 것(`command_line`). command 메뉴의 확장에 맞춰 `#`을 escape하되 `#[` style은 그대로 둔다. tmux 확장은 `##[`를 줄이지 않고 남기므로, 모두 escape하면 중첩 메뉴가 제목의 `#[align=centre]`와 `-` 이름 앞 `#[default]`를 글자로 그렸다 (리뷰 실측, 3.4·3.7b).
+  - `workspaces`, 크기 항목: 각 키 바인딩과 같은 `run-shell` 명령. 크기는 `size.sh`(D11).
+  - `shrink`는 메뉴 높이(항목, 구분선, 위아래 테두리)도 넘긴다. `size.sh`는 줄인 popup 안이 그보다 낮아지면 줄이지 않는다. tmux는 client보다 높은 메뉴를 메시지 없이 그리지 않는데, grow·reset은 기본 키가 없어 메뉴가 안 열리면 되돌릴 방법이 `prefix + z`뿐이었다 (리뷰 실측, 3.4·3.7b). 크기 키의 shrink는 그대로 20%까지 간다.
+  - `new-workspace`, `rename-workspace`, `kill-workspace`: `workspace-menu.sh <client> new|rename|kill`. workspace 메뉴의 그 항목 명령을 `-t <client>`로 바로 실행한다. 값은 `client_values`로 읽는다.
+  - 이 prompt는 `-b`로 띄운다. job이 답을 기다리면 n에 job이 실패해 pane이 `returned 1`을 보였고, 답하기 전에 popup이 사라지면 job이 끝나지 않아 마지막 workspace가 닫혀도 greenroom server가 남았다 (리뷰 실측, 3.4·3.7b).
+  - `kill-window`: tmux의 `prefix + &`처럼 `confirm-before -p 'kill window #W? (y/n)' kill-window`. 확인한 client의 현재 window가 대상이다.
+  - `hide`: `detach-client`.
+- 사용자 명령 `@greenroom-command-<id>-run`은 쓴 그대로 항목 명령에 넣는다. `display-menu`는 메뉴를 그릴 때 명령의 format을 확장하므로 글자 `#`는 `##`로 써야 한다. 메뉴를 연 뒤 바꾼 option 값이 아니라 연 때의 값이 들어간다 (실측, 3.4·3.7b).
+- id별 옵션은 `@greenroom-command-<id>-label`, `-key`, `-run`이고, 셋 다 접미어가 반드시 붙는다.
+  - 이유: id에 `-`가 들어갈 수 있다. 접미어 없는 옵션(`@greenroom-command-<id>`)을 두면 id `x-key`의 명령 옵션이 id `x`의 단축키 옵션과 같은 이름이 된다. 세 접미어는 어느 것도 다른 것의 끝부분이 아니므로 id가 다르면 옵션 이름도 반드시 다르다.
+  - 접두어 `@greenroom-command-`는 목록 `@greenroom-commands`, 메뉴 키 `@greenroom-commands-key`와도 겹치지 않는다. `command` 다음 글자가 `-`와 `s`로 갈린다.
+  - built-in id는 `-run`을 무시한다. 사용자가 built-in 동작을 다른 명령으로 바꾸려면 다른 id를 쓴다.
+- `M`은 tmux 기본 바인딩(`select-pane -M`, 표시한 pane 해제)이 있는 키다 (실측, 3.4·3.7b `list-keys`). 빈 값이면 바인딩하지 않고, 키를 바꾸거나 비우면 D3대로 tmux 바인딩을 되돌린다.
+- status line 힌트에 `<prefix> <키> menu`를 더했다. 키가 비면 숨긴다. 메뉴 제목 ` commands `와 다른 낱말을 써서 화면에서 메뉴를 찾는 테스트가 status line과 헷갈리지 않는다.
 
 ## 동작 흐름
 
@@ -250,6 +276,7 @@ popup 안 (greenroom server):
 | `prefix` + `g`             | popup 닫기                        |
 | `prefix` + `c`             | profile 메뉴                      |
 | `prefix` + `G`             | workspace 메뉴                    |
+| `prefix` + `M`             | command 메뉴                      |
 | `prefix` + `z`             | large 모드 토글                   |
 | `prefix` + `n` `p` `0`-`9` | window 전환 (tmux 기본)           |
 | `prefix` + `s` `w`         | workspace·window 트리 (tmux 기본) |
@@ -260,40 +287,46 @@ popup 안 (greenroom server):
 
 ## 옵션
 
-| 옵션                            | 기본값                                  | 설명                                      |
-| ------------------------------- | --------------------------------------- | ----------------------------------------- |
-| `@greenroom-key`                | `g`                                     | popup 토글 키 (prefix table)              |
-| `@greenroom-root-key`           | 없음                                    | prefix 없이 토글하는 키 (root table)      |
-| `@greenroom-workspaces-key`     | `G`                                     | workspace 메뉴 키 (host, popup 안 공통)   |
-| `@greenroom-profiles-key`       | `c`                                     | popup 안 profile 메뉴 키                  |
-| `@greenroom-send-key`           | `a`                                     | 선택 영역 보내기 키 (copy-mode)           |
-| `@greenroom-send-pane-key`      | `S`                                     | pane 화면 보내기 키 (prefix table)        |
-| `@greenroom-large-key`          | `z`                                     | popup 안 large 모드 토글 키               |
-| `@greenroom-grow-key`           | 없음                                    | popup 안 크기 키우기 키                   |
-| `@greenroom-shrink-key`         | 없음                                    | popup 안 크기 줄이기 키                   |
-| `@greenroom-reset-key`          | 없음                                    | popup 안 크기 되돌리기 키                 |
-| `@greenroom-profiles`           | `claude codex gemini opencode \| shell` | profile 메뉴 항목과 순서                  |
-| `@greenroom-profile-<name>-cmd` | `<name>`                                | profile 실행 명령                         |
-| `@greenroom-profile-<name>-key` | 자동                                    | profile 메뉴 단축키                       |
-| `@greenroom-profile-shell-cmd`  | login shell                             | 메뉴의 `shell` 항목이 실행할 명령         |
-| `@greenroom-default`            | `claude`                                | 새 workspace의 첫 window profile          |
-| `@greenroom-workspace`          | `main`                                  | 기본 workspace 이름                       |
-| `@greenroom-width`              | `80%`                                   | popup 너비                                |
-| `@greenroom-height`             | `80%`                                   | popup 높이                                |
-| `@greenroom-large-width`        | `95%`                                   | large 모드 popup 너비                     |
-| `@greenroom-large-height`       | `95%`                                   | large 모드 popup 높이                     |
-| `@greenroom-resize-step`        | `10`                                    | 키우기·줄이기 한 번에 바뀌는 %p           |
-| `@greenroom-x`                  | `C`                                     | popup 가로 위치                           |
-| `@greenroom-y`                  | `C`                                     | popup 세로 위치                           |
-| `@greenroom-border-lines`       | `rounded`                               | popup 테두리 (`popup-border-lines` 값)    |
-| `@greenroom-socket`             | `greenroom`                             | greenroom server socket 이름 (`-L`)       |
-| `@greenroom-config`             | 없음                                    | greenroom server 시작 시 추가로 읽을 conf |
+| 옵션                            | 기본값                                                   | 설명                                      |
+| ------------------------------- | -------------------------------------------------------- | ----------------------------------------- |
+| `@greenroom-key`                | `g`                                                      | popup 토글 키 (prefix table)              |
+| `@greenroom-root-key`           | 없음                                                     | prefix 없이 토글하는 키 (root table)      |
+| `@greenroom-workspaces-key`     | `G`                                                      | workspace 메뉴 키 (host, popup 안 공통)   |
+| `@greenroom-profiles-key`       | `c`                                                      | popup 안 profile 메뉴 키                  |
+| `@greenroom-commands-key`       | `M`                                                      | popup 안 command 메뉴 키                  |
+| `@greenroom-send-key`           | `a`                                                      | 선택 영역 보내기 키 (copy-mode)           |
+| `@greenroom-send-pane-key`      | `S`                                                      | pane 화면 보내기 키 (prefix table)        |
+| `@greenroom-large-key`          | `z`                                                      | popup 안 large 모드 토글 키               |
+| `@greenroom-grow-key`           | 없음                                                     | popup 안 크기 키우기 키                   |
+| `@greenroom-shrink-key`         | 없음                                                     | popup 안 크기 줄이기 키                   |
+| `@greenroom-reset-key`          | 없음                                                     | popup 안 크기 되돌리기 키                 |
+| `@greenroom-profiles`           | `claude codex gemini opencode \| shell`                  | profile 메뉴 항목과 순서                  |
+| `@greenroom-profile-<name>-cmd` | `<name>`                                                 | profile 실행 명령                         |
+| `@greenroom-profile-<name>-key` | 자동                                                     | profile 메뉴 단축키                       |
+| `@greenroom-profile-shell-cmd`  | login shell                                              | 메뉴의 `shell` 항목이 실행할 명령         |
+| `@greenroom-commands`           | `profiles workspaces \| large grow shrink reset \| hide` | command 메뉴 항목과 순서                  |
+| `@greenroom-command-<id>-label` | built-in 이름 또는 `<id>`                                | command 메뉴 항목 이름                    |
+| `@greenroom-command-<id>-key`   | built-in 키 또는 자동                                    | command 메뉴 단축키                       |
+| `@greenroom-command-<id>-run`   | 없음                                                     | built-in이 아닌 id가 실행할 tmux 명령     |
+| `@greenroom-default`            | `claude`                                                 | 새 workspace의 첫 window profile          |
+| `@greenroom-workspace`          | `main`                                                   | 기본 workspace 이름                       |
+| `@greenroom-width`              | `80%`                                                    | popup 너비                                |
+| `@greenroom-height`             | `80%`                                                    | popup 높이                                |
+| `@greenroom-large-width`        | `95%`                                                    | large 모드 popup 너비                     |
+| `@greenroom-large-height`       | `95%`                                                    | large 모드 popup 높이                     |
+| `@greenroom-resize-step`        | `10`                                                     | 키우기·줄이기 한 번에 바뀌는 %p           |
+| `@greenroom-x`                  | `C`                                                      | popup 가로 위치                           |
+| `@greenroom-y`                  | `C`                                                      | popup 세로 위치                           |
+| `@greenroom-border-lines`       | `rounded`                                                | popup 테두리 (`popup-border-lines` 값)    |
+| `@greenroom-socket`             | `greenroom`                                              | greenroom server socket 이름 (`-L`)       |
+| `@greenroom-config`             | 없음                                                     | greenroom server 시작 시 추가로 읽을 conf |
 
 - 메뉴 키 옵션 이름은 `@greenroom-<메뉴>-key` 형식이다. 처음 이름 `@greenroom-new-key`, `@greenroom-menu-key`는 2026-10-01에 `@greenroom-agents-key`, `@greenroom-workspaces-key`로 바꿨고 호환 별칭은 두지 않았다.
 - 2026-10-02에 메뉴 항목을 agent에서 profile로, 전용 server를 agent server에서 greenroom server로 바꿨다 (`@greenroom-agents`·`-agents-key`·`-<name>-cmd`·`-<name>-key` → `@greenroom-profiles`·`-profiles-key`·`-profile-<name>-cmd`·`-profile-<name>-key`). 접두어를 따로 두어 profile 이름이 플러그인 키 옵션과 구조적으로 겹치지 않으므로 이름 목록 우회를 지웠다. 호환 별칭은 없다.
 - host 키(`@greenroom-key`, `-root-key`, `-workspaces-key`)는 플러그인 로드 때 host 바인딩에 들어간다. 바꾸면 conf를 다시 읽어야 하고, 그때 옛 키는 풀린다.
 - 나머지는 여는 때마다 읽는다. popup 크기·위치·테두리는 `open.sh`가 읽는다 (D11). greenroom server 쪽 키 바인딩도 여는 때마다 다시 만든다.
-- 크기 키 옵션은 빈 값이면 바인딩하지 않는다. 기본값이 있는 것은 `@greenroom-large-key`(`z`)뿐이다.
+- 크기 키 옵션은 빈 값이면 바인딩하지 않는다. 기본값이 있는 것은 `@greenroom-large-key`(`z`)뿐이다. `@greenroom-commands-key`도 빈 값이면 바인딩하지 않는다.
+- command 메뉴의 id별 옵션은 `-label`, `-key`, `-run` 접미어가 반드시 붙는다 (D12).
 - 크기 상태 `@greenroom_size_width`, `@greenroom_size_height`, `@greenroom_size_large`는 host server의 플러그인 상태다 (D11).
 
 ## 파일 구성
@@ -306,7 +339,7 @@ scripts/open.sh             open the host popup at the current size (host)
 scripts/attach.sh           popup job: pick and prepare a workspace, attach
 scripts/size.sh             popup size keys: store the size, re-open (greenroom server)
 scripts/run-profile.sh      profile wrapper run by every window
-scripts/workspace-menu.sh   workspace menu (greenroom server)
+scripts/workspace-menu.sh   workspace menu and its actions (greenroom server)
 scripts/new-workspace.sh    create a workspace from the menu prompt
 scripts/rename-workspace.sh rename a workspace from the menu prompt
 scripts/alert.sh            bell alerts to the host (greenroom server hooks)
@@ -419,7 +452,8 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, greenroom)로 실측했�
 - 크기 키는 `@greenroom_host`(마지막으로 연 host server)로 간다. host 둘이 같은 greenroom server를 쓰면 다른 host의 popup에서는 크기 키가 아무것도 하지 않는다.
 - 크기 상태는 host server에 하나다. client마다 따로 두지 않고, 다른 client의 popup은 다음에 열 때 반영된다.
 - greenroom server에 직접 attach한 client에서는 크기 키가 아무것도 하지 않는다. 그 client에서 `prefix + z`는 zoom도 아니다.
-- 플러그인이 쓰다가 놓은 greenroom server 키 중 `c`, `z`, `-`, `=` 밖의 키는 greenroom server를 재시작할 때까지 바인딩이 없다 (D3).
+- 터미널을 줄이거나 크기 키로 줄여 popup 안이 command 메뉴보다 낮아지면 메뉴가 메시지 없이 열리지 않는다. `prefix + z`로 large 모드가 되면 다시 열린다.
+- 플러그인이 쓰다가 놓은 greenroom server 키 중 `c`, `M`, `z`, `-`, `=` 밖의 키는 greenroom server를 재시작할 때까지 바인딩이 없다 (D3).
 - 크기 키를 re-open보다 빨리(0.1초 간격) 누르면 단계가 빠질 수 있다 (실측 33 아래). 두 re-open의 `open.sh`가 거의 같이 돌아 `display-popup` 순서가 뒤집히면 popup이 바로 전 크기로 남을 수 있다 (미실측, 다음 크기 키나 열기에서 바로잡힌다).
 - 테스트는 항상 고유한 `-L` socket을 쓰고, 기본 server와 실제 `greenroom` socket에는 접근하지 않는다.
 

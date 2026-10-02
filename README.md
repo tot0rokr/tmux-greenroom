@@ -75,6 +75,7 @@ Inside the popup, the greenroom server uses the same prefix as your host tmux:
 | `prefix` + `d`               | Close the popup (tmux default)             |
 | `prefix` + `c`               | Open the profile menu                      |
 | `prefix` + `G`               | Open the workspace menu                    |
+| `prefix` + `M`               | Open the command menu                      |
 | `prefix` + `z`               | Toggle large mode                          |
 | `prefix` + `n`, `p`, `0`-`9` | Switch window (tmux default)               |
 | `prefix` + `&`               | Kill the current window (tmux default)     |
@@ -153,7 +154,7 @@ A new workspace starts one window of the `@greenroom-default` profile in the dir
 
 `prefix` + `z` inside the popup toggles large mode. The popup then takes `@greenroom-large-width` by `@greenroom-large-height` of the terminal, 95% by 95% by default: almost the whole screen, but its border and a margin of the host stay visible, so it still reads as a popup. On a terminal of 20 rows or fewer, 95% leaves a single spare row, so the top border reaches the first row. Press `prefix` + `z` again to go back.
 
-To grow and shrink the popup in steps, give the other size actions a key. They have none by default:
+To grow and shrink the popup in steps, use the [command menu](#command-menu), or give the other size actions a key. They have none by default:
 
 ```tmux
 set -g @greenroom-grow-key '+'
@@ -174,6 +175,77 @@ set -g @greenroom-reset-key '='
 - The size stays until you reset it or the host tmux server restarts. Closing the popup, reloading the config, and sending text to the popup keep it. It is one setting for the host server: a popup on another client takes it the next time it opens.
 - `prefix` + `z` replaces tmux's own zoom key inside the popup. Set `@greenroom-large-key` to another key, or to `''` to leave large mode without a key; `prefix` + `z` zooms again from the next open.
 - The size keys do nothing in a client attached to the greenroom server directly, such as `tmux -L greenroom attach`, because it shows no popup.
+
+### Command menu
+
+`prefix` + `M` inside the popup opens the command menu, which puts the popup actions in one list. `@greenroom-commands` names its entries, in order. With the default list, `profiles workspaces | large grow shrink reset | hide`, it looks like this:
+
+```
+┌─── commands ────┐
+│ Profiles    (c) │
+│ Workspaces  (w) │
+├─────────────────┤
+│ Large popup (z) │
+│ Grow        (+) │
+│ Shrink      (-) │
+│ Reset size  (=) │
+├─────────────────┤
+│ Hide popup  (h) │
+└─────────────────┘
+```
+
+The built-in commands:
+
+| Id                 | Label            | Key | Action                                                |
+| ------------------ | ---------------- | --- | ----------------------------------------------------- |
+| `profiles`         | Profiles         | `c` | Open the profile menu                                 |
+| `workspaces`       | Workspaces       | `w` | Open the workspace menu                               |
+| `large`            | Large popup      | `z` | Toggle large mode                                     |
+| `grow`             | Grow             | `+` | Grow the popup by one step                            |
+| `shrink`           | Shrink           | `-` | Shrink the popup by one step                          |
+| `reset`            | Reset size       | `=` | Go back to `@greenroom-width` and `@greenroom-height` |
+| `hide`             | Hide popup       | `h` | Close the popup (its windows keep running)            |
+| `new-workspace`    | New workspace    | `n` | Create a workspace (prompts for a name)               |
+| `rename-workspace` | Rename workspace | `r` | Rename the current workspace                          |
+| `kill-workspace`   | Kill workspace   | `x` | Kill the current workspace, after a confirmation      |
+| `kill-window`      | Kill window      | `X` | Kill the current window, after a confirmation         |
+
+Each command acts on the popup that opened the menu: its workspace, its window, and its size. The workspace commands use the prompts of the workspace menu.
+
+Shrink stops before the popup gets too short to show the command menu, because tmux does not draw a menu taller than the popup. If the popup is too short for the menu anyway, for example after the terminal got smaller, `prefix` + `z` makes it large and the menu opens again.
+
+- The list follows the rules of `@greenroom-profiles`: an id is made of letters, digits, `_`, and `-`, other words are skipped, an id listed twice appears once, and `|` draws a separator line, dropped at either end of the list or next to another `|`.
+- An empty list, or one of separators only, shows a disabled `no commands configured` entry.
+- Any other id runs `@greenroom-command-<id>-run`, a tmux command, in the greenroom server. It runs as a key binding in the popup would, on the client and the current pane of the popup. Without that option the entry shows as a disabled `<id> (not defined)`. A built-in id ignores the option.
+- tmux expands formats in the command when it draws the menu, as in any `display-menu` entry: `#{pane_current_path}` is the path of the current pane, and a literal `#` must be written `##`.
+- `@greenroom-command-<id>-label` sets the label of an entry. An id that is not built in is its own label by default.
+- `@greenroom-command-<id>-key` sets the shortcut of an entry. The keys in the table count as explicit keys too. Shortcuts follow the rules of the profile menu: the first entry to claim a key gets it, and an entry without a key, or whose key an earlier entry took or is an arrow key, gets the first lowercase letter or digit of its id that is free and not `q`, `j`, `k`, `g`, or `G`.
+
+For example, to put the workspace menu first, drop grow, shrink, and reset, and add a command that splits the current window:
+
+```tmux
+set -g @greenroom-commands 'workspaces profiles | split kill-window | large hide'
+set -g @greenroom-command-split-run 'split-window -h'
+set -g @greenroom-command-split-label 'Split pane'
+set -g @greenroom-command-large-label 'Toggle large'
+```
+
+```
+┌──── commands ────┐
+│ Workspaces   (w) │
+│ Profiles     (c) │
+├──────────────────┤
+│ Split pane   (s) │
+│ Kill window  (X) │
+├──────────────────┤
+│ Toggle large (z) │
+│ Hide popup   (h) │
+└──────────────────┘
+```
+
+Every command option ends in `-label`, `-key`, or `-run`, so the options of two ids never share a name, even when an id contains `-`.
+
+`prefix` + `M` replaces tmux's own key that clears the marked pane (`select-pane -M`) inside the popup. Set `@greenroom-commands-key` to another key, or to `''` for no key; `prefix` + `M` gets its tmux binding back from the next open.
 
 ### Lifetime
 
@@ -215,33 +287,38 @@ Shift+Enter reaches the program in the popup if your host tmux has `extended-key
 
 ## Options
 
-| Option                          | Default                                 | Description                                                           |
-| ------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
-| `@greenroom-key`                | `g`                                     | Key that opens and closes the popup                                   |
-| `@greenroom-root-key`           | empty                                   | Key that opens and closes the popup without the prefix, such as `M-g` |
-| `@greenroom-workspaces-key`     | `G`                                     | Key for the workspace menu, on the host and inside the popup          |
-| `@greenroom-profiles-key`       | `c`                                     | Key for the profile menu inside the popup                             |
-| `@greenroom-send-key`           | `a`                                     | Copy-mode key that sends the selection to the popup                   |
-| `@greenroom-send-pane-key`      | `S`                                     | Key that sends the visible screen of the pane to the popup            |
-| `@greenroom-large-key`          | `z`                                     | Key inside the popup that toggles large mode; `''` for none           |
-| `@greenroom-grow-key`           | empty                                   | Key inside the popup that grows it by one step                        |
-| `@greenroom-shrink-key`         | empty                                   | Key inside the popup that shrinks it by one step                      |
-| `@greenroom-reset-key`          | empty                                   | Key inside the popup that goes back to the size options               |
-| `@greenroom-profiles`           | `claude codex gemini opencode \| shell` | Profile menu entries, in order                                        |
-| `@greenroom-profile-<name>-cmd` | `<name>`                                | Command that starts the profile called `<name>`                       |
-| `@greenroom-profile-<name>-key` | automatic                               | Shortcut of the profile called `<name>` in the profile menu           |
-| `@greenroom-default`            | `claude`                                | Profile of the first window of a new workspace                        |
-| `@greenroom-workspace`          | `main`                                  | Workspace to open when there is no last workspace                     |
-| `@greenroom-width`              | `80%`                                   | Popup width                                                           |
-| `@greenroom-height`             | `80%`                                   | Popup height                                                          |
-| `@greenroom-large-width`        | `95%`                                   | Popup width in large mode                                             |
-| `@greenroom-large-height`       | `95%`                                   | Popup height in large mode                                            |
-| `@greenroom-resize-step`        | `10`                                    | Percentage points that grow and shrink change the size by             |
-| `@greenroom-x`                  | `C`                                     | Popup horizontal position                                             |
-| `@greenroom-y`                  | `C`                                     | Popup vertical position                                               |
-| `@greenroom-border-lines`       | `rounded`                               | Popup border, a `popup-border-lines` value                            |
-| `@greenroom-socket`             | `greenroom`                             | Socket name of the greenroom server (`tmux -L`)                       |
-| `@greenroom-config`             | empty                                   | Extra config file for the greenroom server                            |
+| Option                          | Default                                                  | Description                                                           |
+| ------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| `@greenroom-key`                | `g`                                                      | Key that opens and closes the popup                                   |
+| `@greenroom-root-key`           | empty                                                    | Key that opens and closes the popup without the prefix, such as `M-g` |
+| `@greenroom-workspaces-key`     | `G`                                                      | Key for the workspace menu, on the host and inside the popup          |
+| `@greenroom-profiles-key`       | `c`                                                      | Key for the profile menu inside the popup                             |
+| `@greenroom-commands-key`       | `M`                                                      | Key for the command menu inside the popup; `''` for none              |
+| `@greenroom-send-key`           | `a`                                                      | Copy-mode key that sends the selection to the popup                   |
+| `@greenroom-send-pane-key`      | `S`                                                      | Key that sends the visible screen of the pane to the popup            |
+| `@greenroom-large-key`          | `z`                                                      | Key inside the popup that toggles large mode; `''` for none           |
+| `@greenroom-grow-key`           | empty                                                    | Key inside the popup that grows it by one step                        |
+| `@greenroom-shrink-key`         | empty                                                    | Key inside the popup that shrinks it by one step                      |
+| `@greenroom-reset-key`          | empty                                                    | Key inside the popup that goes back to the size options               |
+| `@greenroom-profiles`           | `claude codex gemini opencode \| shell`                  | Profile menu entries, in order                                        |
+| `@greenroom-profile-<name>-cmd` | `<name>`                                                 | Command that starts the profile called `<name>`                       |
+| `@greenroom-profile-<name>-key` | automatic                                                | Shortcut of the profile called `<name>` in the profile menu           |
+| `@greenroom-commands`           | `profiles workspaces \| large grow shrink reset \| hide` | Command menu entries, in order                                        |
+| `@greenroom-command-<id>-label` | built-in label, or `<id>`                                | Label of the command `<id>` in the command menu                       |
+| `@greenroom-command-<id>-key`   | built-in key, or automatic                               | Shortcut of the command `<id>` in the command menu                    |
+| `@greenroom-command-<id>-run`   | empty                                                    | tmux command of the command `<id>`, if it is not built in             |
+| `@greenroom-default`            | `claude`                                                 | Profile of the first window of a new workspace                        |
+| `@greenroom-workspace`          | `main`                                                   | Workspace to open when there is no last workspace                     |
+| `@greenroom-width`              | `80%`                                                    | Popup width                                                           |
+| `@greenroom-height`             | `80%`                                                    | Popup height                                                          |
+| `@greenroom-large-width`        | `95%`                                                    | Popup width in large mode                                             |
+| `@greenroom-large-height`       | `95%`                                                    | Popup height in large mode                                            |
+| `@greenroom-resize-step`        | `10`                                                     | Percentage points that grow and shrink change the size by             |
+| `@greenroom-x`                  | `C`                                                      | Popup horizontal position                                             |
+| `@greenroom-y`                  | `C`                                                      | Popup vertical position                                               |
+| `@greenroom-border-lines`       | `rounded`                                                | Popup border, a `popup-border-lines` value                            |
+| `@greenroom-socket`             | `greenroom`                                              | Socket name of the greenroom server (`tmux -L`)                       |
+| `@greenroom-config`             | empty                                                    | Extra config file for the greenroom server                            |
 
 A profile name may contain letters, digits, `_`, and `-`. The command runs through `$SHELL -lc`, so it can carry arguments and environment assignments, and the `PATH` that your login shell sets up applies. `@greenroom-default` may name any profile, listed in `@greenroom-profiles` or not. See [Profile menu](#profile-menu) for the list syntax and `shell`.
 
@@ -254,7 +331,7 @@ set -g @greenroom-profiles 'claude codex aider | shell'
 set -g @greenroom-profile-aider-cmd 'aider --no-auto-commits'
 ```
 
-The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-workspaces-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options, the popup size and position included, are read on every open. A key that the plugin stops using inside the popup is unbound; `c`, `z`, `-`, and `=` get tmux's own binding back, and other keys get theirs back when the greenroom server restarts.
+The host keys (`@greenroom-key`, `@greenroom-root-key`, `@greenroom-workspaces-key`, `@greenroom-send-key`, `@greenroom-send-pane-key`) are read when the plugin loads, so reload your config after changing them. The old keys are unbound on reload. The other options, the popup size and position included, are read on every open. A key that the plugin stops using inside the popup is unbound; `c`, `M`, `z`, `-`, and `=` get tmux's own binding back, and other keys get theirs back when the greenroom server restarts.
 
 ## Customizing the greenroom server
 

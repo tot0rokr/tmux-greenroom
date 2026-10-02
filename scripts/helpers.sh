@@ -87,6 +87,15 @@ quote() {
   printf "'%s'" "${1//$q/$escaped}"
 }
 
+# Joins the arguments into one tmux command line.
+command_line() {
+  local arg line=''
+  for arg in "$@"; do
+    line+=" $(quote "$arg")"
+  done
+  printf '%s' "${line# }"
+}
+
 # Escapes '#' so a string survives format expansion (display-menu items,
 # start directories).
 format_escape() {

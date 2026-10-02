@@ -24,14 +24,17 @@ KEY=$(get_tmux_option @greenroom-key g)
 ROOT_KEY=$(get_tmux_option @greenroom-root-key '')
 PROFILES_KEY=$(get_tmux_option @greenroom-profiles-key c)
 WORKSPACES_KEY=$(get_tmux_option @greenroom-workspaces-key G)
-# An empty value binds no key, so prefix + z stays tmux's zoom.
+# An empty value binds no key, so prefix + M or z keeps its tmux binding.
+COMMANDS_KEY=$(tmux show-option -gv @greenroom-commands-key 2>/dev/null) || COMMANDS_KEY=M
 LARGE_KEY=$(tmux show-option -gv @greenroom-large-key 2>/dev/null) || LARGE_KEY=z
 GROW_KEY=$(get_tmux_option @greenroom-grow-key '')
 SHRINK_KEY=$(get_tmux_option @greenroom-shrink-key '')
 RESET_KEY=$(get_tmux_option @greenroom-reset-key '')
-# An empty list is kept: it means no profiles, not the default.
+# An empty list is kept: it means an empty menu, not the default.
 PROFILES=$(tmux show-option -gv @greenroom-profiles 2>/dev/null) ||
   PROFILES='claude codex gemini opencode | shell'
+COMMANDS=$(tmux show-option -gv @greenroom-commands 2>/dev/null) ||
+  COMMANDS='profiles workspaces | large grow shrink reset | hide'
 DEFAULT_PROFILE=$(get_tmux_option @greenroom-default claude)
 DEFAULT_WORKSPACE=$(sanitize_name "$(get_tmux_option @greenroom-workspace main)")
 USER_CONFIG=$(get_tmux_option @greenroom-config '')
@@ -134,59 +137,173 @@ push_state() {
   chain set-option -g @greenroom_key "$KEY"
   chain set-option -g @greenroom_profiles_key "$PROFILES_KEY"
   chain set-option -g @greenroom_workspaces_key "$WORKSPACES_KEY"
+  chain set-option -g @greenroom_commands_key "$COMMANDS_KEY"
   chain set-option -g @greenroom_default "$DEFAULT_PROFILE"
 }
 
-profile_menu() {
-  local tokens=() names=() gaps=() options=() keys=() claimed=' ' used
-  local token gap='' key label spawn i
+# Sets MENU_NAMES and MENU_GAPS (1 for a separator above the item) from a menu
+# list. Invalid names and repeats are skipped. So is a '|' at either end or
+# next to another one: tmux merges repeated separators but draws a trailing one.
+menu_entries() {
+  local tokens=() token gap=''
+  MENU_NAMES=()
+  MENU_GAPS=()
   # read, unlike an unquoted expansion, does not glob a token such as '*'.
-  read -r -d '' -a tokens <<<"$PROFILES"
+  read -r -d '' -a tokens <<<"$1"
   for token in "${tokens[@]}"; do
     if [[ $token == '|' ]]; then
-      ((${#names[@]})) && gap=1
+      ((${#MENU_NAMES[@]})) && gap=1
       continue
     fi
     is_valid_name "$token" || continue
-    case " ${names[*]} " in
+    case " ${MENU_NAMES[*]} " in
       *" $token "*) continue ;;
     esac
-    names+=("$token")
-    gaps+=("$gap")
-    options+=("@greenroom-profile-$token-key")
+    MENU_NAMES+=("$token")
+    MENU_GAPS+=("$gap")
     gap=''
   done
+}
 
-  PROFILE_MENU=(display-menu -T '#[align=centre] profiles ' -x C -y C --)
-  if ((${#names[@]} == 0)); then
-    PROFILE_MENU+=('-no profiles configured' '' '')
-    return
-  fi
-
+# menu_keys key...
+# Sets MENU_KEYS to the shortcuts of MENU_NAMES, given their explicit keys. A
+# name of '' gets none.
+menu_keys() {
+  local claimed=' ' used key i
+  MENU_KEYS=("$@")
   # Explicit keys go first, so an automatic shortcut never takes one.
-  IFS=$FIELD_SEPARATOR read -r -d '' -a keys < <(read_raw_options "${options[@]}")
-  for i in "${!names[@]}"; do
-    key=${keys[i]}
+  for i in "${!MENU_NAMES[@]}"; do
+    key=${MENU_KEYS[i]}
     [[ $key =~ $ARROW_KEY ]] && key=''
     case $claimed in
       *" $key "*) key='' ;;
     esac
-    keys[i]=$key
+    MENU_KEYS[i]=$key
     [[ -n $key ]] && claimed+="$key "
   done
   used=$RESERVED_MENU_KEYS$claimed
-  for i in "${!names[@]}"; do
-    if [[ -z ${keys[i]} ]]; then
-      keys[i]=$(menu_shortcut "${names[i]}" "$used")
-      used+="${keys[i]} "
+  for i in "${!MENU_NAMES[@]}"; do
+    if [[ -z ${MENU_KEYS[i]} ]]; then
+      MENU_KEYS[i]=$(menu_shortcut "${MENU_NAMES[i]}" "$used")
+      used+="${MENU_KEYS[i]} "
     fi
-    [[ -n ${gaps[i]} ]] && PROFILE_MENU+=('')
-    label=${names[i]}
-    # display-menu draws a name that starts with '-' as a disabled item.
-    [[ $label == -* ]] && label="#[default]$label"
+  done
+}
+
+menu_label() {
+  local label
+  label=$(format_escape "$1")
+  # display-menu draws a name that starts with '-' as a disabled item.
+  [[ $label == -* ]] && label="#[default]$label"
+  printf '%s' "$label"
+}
+
+profile_menu() {
+  local options=() keys=() name spawn i
+  menu_entries "$PROFILES"
+  PROFILE_MENU=(display-menu -T '#[align=centre] profiles ' -x C -y C --)
+  if ((${#MENU_NAMES[@]} == 0)); then
+    PROFILE_MENU+=('-no profiles configured' '' '')
+    return
+  fi
+
+  for name in "${MENU_NAMES[@]}"; do
+    options+=("@greenroom-profile-$name-key")
+  done
+  IFS=$FIELD_SEPARATOR read -r -d '' -a keys < <(read_raw_options "${options[@]}")
+  menu_keys "${keys[@]}"
+  for i in "${!MENU_NAMES[@]}"; do
+    [[ -n ${MENU_GAPS[i]} ]] && PROFILE_MENU+=('')
+    name=${MENU_NAMES[i]}
     # Escaped, so new-window -c expands the origin itself when the item runs.
-    spawn="new-window -c '#{@greenroom_origin}' -n $(quote "${names[i]}") $(quote "$(profile_command "${names[i]}")")"
-    PROFILE_MENU+=("$label" "${keys[i]}" "$(format_escape "$spawn")")
+    spawn="new-window -c '#{@greenroom_origin}' -n $(quote "$name") $(quote "$(profile_command "$name")")"
+    PROFILE_MENU+=("$(menu_label "$name")" "${MENU_KEYS[i]}" "$(format_escape "$spawn")")
+  done
+}
+
+# Shell commands for run-shell, which expands their formats when it runs them.
+workspace_menu_command() {
+  printf "%s '#{client_name}'%s" "$(format_escape "$(quote "$SCRIPTS_DIR/workspace-menu.sh")")" "${1:+ $1}"
+}
+
+size_command() {
+  printf "%s %s '#{client_pid}' #{q:session_name}%s" "$(format_escape "$(quote "$SCRIPTS_DIR/size.sh")")" "$1" "${2:+ $2}"
+}
+
+# Sets ITEM_LABEL, ITEM_KEY and ITEM_ACTION to the label, shortcut and tmux
+# command of a built-in command, or fails if the id is not one. The command
+# runs with the client that opened the menu and its session as the context.
+builtin_command() {
+  local shell=''
+  case $1 in
+    profiles) ITEM_LABEL=Profiles ITEM_KEY=c ITEM_ACTION=$(command_line "${PROFILE_MENU[@]}") ;;
+    workspaces) ITEM_LABEL=Workspaces ITEM_KEY=w shell=$(workspace_menu_command) ;;
+    large) ITEM_LABEL='Large popup' ITEM_KEY=z shell=$(size_command large) ;;
+    grow) ITEM_LABEL=Grow ITEM_KEY=+ shell=$(size_command grow) ;;
+    shrink) ITEM_LABEL=Shrink ITEM_KEY=- shell=$(size_command shrink "$MENU_ROWS") ;;
+    reset) ITEM_LABEL='Reset size' ITEM_KEY='=' shell=$(size_command reset) ;;
+    hide) ITEM_LABEL='Hide popup' ITEM_KEY=h ITEM_ACTION=detach-client ;;
+    new-workspace) ITEM_LABEL='New workspace' ITEM_KEY=n shell=$(workspace_menu_command new) ;;
+    rename-workspace) ITEM_LABEL='Rename workspace' ITEM_KEY=r shell=$(workspace_menu_command rename) ;;
+    kill-workspace) ITEM_LABEL='Kill workspace' ITEM_KEY=x shell=$(workspace_menu_command kill) ;;
+    kill-window)
+      ITEM_LABEL='Kill window' ITEM_KEY=X
+      ITEM_ACTION=$(command_line confirm-before -p 'kill window #W? (y/n)' kill-window)
+      ;;
+    *) return 1 ;;
+  esac
+  [[ -n $shell ]] && ITEM_ACTION=$(command_line run-shell -b "$shell")
+  return 0
+}
+
+# Uses PROFILE_MENU, so it comes after profile_menu.
+command_menu() {
+  local ids=() options=() values=() labels=() keys=() actions=() id label key run action i
+  local separators style='#[' escaped_style='##[' ITEM_LABEL ITEM_KEY ITEM_ACTION MENU_ROWS
+  menu_entries "$COMMANDS"
+  COMMAND_MENU=(display-menu -T '#[align=centre] commands ' -x C -y C --)
+  if ((${#MENU_NAMES[@]} == 0)); then
+    COMMAND_MENU+=('-no commands configured' '' '')
+    return
+  fi
+
+  # Items, separators and the border: the rows tmux needs to draw the menu,
+  # where its Shrink item stops (size.sh).
+  separators=$(printf '%s' "${MENU_GAPS[@]}")
+  MENU_ROWS=$((${#MENU_NAMES[@]} + ${#separators} + 2))
+  ids=("${MENU_NAMES[@]}")
+  for id in "${ids[@]}"; do
+    options+=("@greenroom-command-$id-label" "@greenroom-command-$id-key" "@greenroom-command-$id-run")
+  done
+  IFS=$FIELD_SEPARATOR read -r -d '' -a values < <(read_raw_options "${options[@]}")
+  for i in "${!ids[@]}"; do
+    id=${ids[i]}
+    label=${values[i * 3]}
+    key=${values[i * 3 + 1]}
+    run=${values[i * 3 + 2]}
+    if builtin_command "$id"; then
+      labels+=("$(menu_label "${label:-$ITEM_LABEL}")")
+      keys+=("${key:-$ITEM_KEY}")
+      action=$(format_escape "$ITEM_ACTION")
+      # Expansion keeps a '##[' as it is, so the '#[' styles of the profile
+      # menu stay unescaped; a lone '#[' passes through.
+      actions+=("${action//"$escaped_style"/$style}")
+    elif [[ -n $run ]]; then
+      labels+=("$(menu_label "${label:-$id}")")
+      keys+=("$key")
+      # As the user wrote it; display-menu expands its formats.
+      actions+=("$run")
+    else
+      labels+=("-$id (not defined)")
+      keys+=('')
+      actions+=('')
+      MENU_NAMES[i]=''
+    fi
+  done
+  menu_keys "${keys[@]}"
+  for i in "${!ids[@]}"; do
+    [[ -n ${MENU_GAPS[i]} ]] && COMMAND_MENU+=('')
+    COMMAND_MENU+=("${labels[i]}" "${MENU_KEYS[i]}" "${actions[i]}")
   done
 }
 
@@ -203,10 +320,13 @@ push_bindings() {
   [[ $prefix != None ]] && chain_bind prefix "$prefix" send-prefix
   chain_bind prefix "$KEY" detach-client
   [[ -n $ROOT_KEY ]] && chain_bind root "$ROOT_KEY" detach-client
-  chain_bind prefix "$WORKSPACES_KEY" run-shell -b \
-    "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'"
+  chain_bind prefix "$WORKSPACES_KEY" run-shell -b "$(workspace_menu_command)"
   profile_menu
   chain_bind prefix "$PROFILES_KEY" "${PROFILE_MENU[@]}"
+  if [[ -n $COMMANDS_KEY ]]; then
+    command_menu
+    chain_bind prefix "$COMMANDS_KEY" "${COMMAND_MENU[@]}"
+  fi
   bind_size_key "$LARGE_KEY" large
   bind_size_key "$GROW_KEY" grow
   bind_size_key "$SHRINK_KEY" shrink
@@ -217,11 +337,12 @@ push_bindings() {
 # Drops a binding of the last open; a new one for the key comes later in CHAIN.
 # tmux has no command that restores one default binding, and on a new greenroom
 # server the binding a key had before the plugin took it cannot be read. So the
-# tmux keys the plugin takes by default (c, z) or the README suggests (-, =)
+# tmux keys the plugin takes by default (c, M, z) or the README suggests (-, =)
 # get their tmux binding back, and other keys stay unbound until a restart.
 release_key() {
   case $1 in
     prefix:c) chain bind-key -T prefix c new-window ;;
+    prefix:M) chain bind-key -T prefix M select-pane -M ;;
     prefix:z) chain bind-key -T prefix z resize-pane -Z ;;
     prefix:-) chain bind-key -T prefix - delete-buffer ;;
     prefix:=) chain bind-key -T prefix = choose-buffer -Z ;;
@@ -232,8 +353,7 @@ release_key() {
 # Popup size keys; see docs/design.md (D11). An empty key is not bound.
 bind_size_key() {
   [[ -n $1 ]] || return 0
-  chain_bind prefix "$1" run-shell -b \
-    "$(format_escape "$(quote "$SCRIPTS_DIR/size.sh")") $2 '#{client_pid}' #{q:session_name}"
+  chain_bind prefix "$1" run-shell -b "$(size_command "$2")"
 }
 
 # size.sh finds the host client of a popup by the pid of its inner client,
@@ -330,7 +450,7 @@ main() {
 
   ATTACH=(attach-session -t "=$workspace")
   if [[ -n $open_menu ]]; then
-    ATTACH+=(';' run-shell -b "$(quote "$SCRIPTS_DIR/workspace-menu.sh") '#{client_name}'")
+    ATTACH+=(';' run-shell -b "$(workspace_menu_command)")
   fi
   [[ -n $paste ]] && paste_after_attach "$workspace" "$created"
   exec env -u TMUX -u TMUX_PANE tmux -L "$SOCKET" "${ATTACH[@]}"
