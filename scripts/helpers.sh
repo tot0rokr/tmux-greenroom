@@ -33,6 +33,54 @@ read_raw_options() {
     tmux delete-buffer -b "$buffer"
 }
 
+# client_values [-S socket] client format...
+# Prints the client's values of the formats, each followed by FIELD_SEPARATOR,
+# or fails if there is no such client. display-message -c gives the values of
+# the most recently active session and its client, not of the given client.
+client_values() {
+  local server=() client format='#{client_name}' name line rest placeholder=$'\001'
+  if [[ $1 == -S ]]; then
+    server=(-S "$2")
+    shift 2
+  fi
+  client=$1
+  shift
+  for name in "$@"; do
+    format+="$FIELD_SEPARATOR$name"
+  done
+  while IFS= read -r line; do
+    # tmux 3.4 prints the separator as \037 and a backslash as \\, so a \037
+    # that is text in a value prints as \\037. The \\ pairs are put back by
+    # concatenation: bash 5.2 turns \\ in a replacement string into \.
+    if [[ $line != *"$FIELD_SEPARATOR"* ]]; then
+      rest=${line//\\\\/$placeholder}
+      rest=${rest//\\037/$FIELD_SEPARATOR}
+      line=
+      while [[ $rest == *"$placeholder"* ]]; do
+        line+=${rest%%"$placeholder"*}'\\'
+        rest=${rest#*"$placeholder"}
+      done
+      line+=$rest
+    fi
+    if [[ ${line%%"$FIELD_SEPARATOR"*} == "$client" ]]; then
+      printf '%s%s' "${line#*"$FIELD_SEPARATOR"}" "$FIELD_SEPARATOR"
+      return 0
+    fi
+  done < <(tmux "${server[@]}" list-clients -F "$format")
+  return 1
+}
+
+# Prints the ID of the client's session. A pane target would not do: tmux
+# resolves it to the most recently active session that has the window, and a
+# window can be in several sessions (session groups, link-window).
+client_session() {
+  local id
+  id=$(client_values "$1" '#{session_id}') || return
+  # Session IDs start with '$', which tmux 3.4 escapes in command output.
+  id=${id//\\/}
+  printf '%s' "${id%"$FIELD_SEPARATOR"}"
+}
+
 # Single-quotes a string for both sh and the tmux command parser.
 quote() {
   local q="'" escaped="'\\''"
@@ -67,11 +115,13 @@ sanitize_name() {
   printf '%s' "$name"
 }
 
-# Reads the name typed into a workspace prompt (see workspace-menu.sh).
+# take_pending_name option
+# Reads and clears the name typed into a workspace prompt (see
+# workspace-menu.sh).
 take_pending_name() {
   local name
-  name=$(read_raw_options @greenroom_pending)
-  tmux set-option -gu @greenroom_pending
+  name=$(read_raw_options "$1")
+  tmux set-option -gu "$1"
   sanitize_name "${name%"$FIELD_SEPARATOR"}"
 }
 

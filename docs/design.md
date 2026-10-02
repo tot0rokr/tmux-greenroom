@@ -106,7 +106,7 @@
 - profile 선택과 workspace 선택을 tmux 내장 `display-menu`로 만든다. bash와 tmux만 있으면 된다.
 - `display-menu`의 이름과 명령은 format으로 확장된다 (man page). 메뉴 명령에 넣는 문자열은 `#`을 `##`로 escape한다.
 - 셸과 tmux parser 양쪽에 같은 single-quote 규칙(`'\''`)을 쓴다. tmux parser도 sh처럼 인접 quoted 토큰을 이어 붙인다 (실측 11).
-- 사용자가 입력하는 workspace 이름은 `command-prompt`의 `%%%`(따옴표 escape)로 option에 먼저 저장하고, 스크립트가 option에서 읽는다. 입력값이 셸 명령줄을 거치지 않는다.
+- 사용자가 입력하는 workspace 이름은 `command-prompt`의 `%%%`(따옴표 escape)로 option에 먼저 저장하고, 스크립트가 option에서 읽는다. 입력값이 셸 명령줄을 거치지 않는다. option은 client마다 따로 둔다 (`@greenroom_pending_<client pid>`).
 - profile 메뉴는 `@greenroom-profiles` 목록 하나가 구성과 순서를 모두 정한다. `|`는 구분선이고, `shell`도 자동으로 붙이지 않는 일반 항목이다. 추가·삭제·순서 변경이 옵션 한 줄로 끝난다.
   - 잘못된 이름은 건너뛰고, 중복 이름은 첫 자리만 남긴다. `@greenroom-default`는 목록과 별개라 목록에 없는 이름도 된다.
   - 앞·끝·연속 `|`는 플러그인이 지운다. tmux는 앞 구분선을 버리고 연속 구분선을 합치지만 끝 구분선은 그린다 (실측, 3.4·3.7b).
@@ -390,6 +390,10 @@ tmux 3.7b에서 격리된 server 세 개(harness, host, greenroom)로 실측했�
 - 새 workspace의 origin과 입력 이름을 `display-message`, `show-option`으로 읽어 3.4에서 `$`가 깨졌다. `read_raw_options`로 바꿨다.
 - workspace 메뉴의 전환·삭제 대상은 이름 대신 session ID를 쓴다. 이름 변경도 입력값을 정리하는 스크립트를 거친다.
 - 실행 중인 greenroom server에서 `@greenroom-large-key`를 빈 값이나 `Z`로 바꾸면 `prefix + z`가 zoom도 large 모드도 아닌 빈 키로 남았다 (리뷰 실측, 3.4·3.7b). D3대로 tmux 바인딩을 되돌린다.
+- workspace 메뉴, 이름 변경, 새 workspace가 자기 client의 session·pane을 `display-message -c <client> -p`로 읽었다. 그 값은 최근 활성 session과 그 client의 것이고, 메뉴·prompt 안의 키는 활동으로 치지 않는다 (실측, 3.4·3.7b). popup 둘이 다른 workspace를 볼 때 메뉴를 연 뒤 다른 popup에 입력하면 이름 변경과 새 workspace의 origin이, 메뉴 job이 뜨는 사이에 입력하면 현재 표시와 삭제도 다른 popup의 workspace를 따랐다. `size.sh`와 함께 `list-clients -F`의 그 client 줄을 읽는 `client_values`를 쓴다.
+- 이름 변경과 새 workspace는 그 client의 pane ID를 대상으로 썼다. tmux는 pane 대상을 그 window가 든 session 중 최근 활성 session으로 바꾼다. window가 여러 session에 있으면(session group, `link-window`) 다른 popup의 workspace 이름이 바뀌고 origin도 그쪽 것을 썼다 (리뷰 실측, 3.4·3.7b). client의 session ID를 대상으로 쓴다.
+- 두 popup이 이름 prompt를 거의 같이 확인하면 전역 `@greenroom_pending` 하나를 두 job이 나눠 읽었다. 한 workspace가 다른 popup의 이름을 받고 다른 쪽 변경은 사라졌다 (리뷰 실측, 3.4·3.7b). option 이름에 client pid를 붙인다.
+- 명령 출력에서 tmux는 백슬래시를 `\\`로 찍고, 3.4는 구분자 byte도 `\037`로 찍는다 (리뷰 실측, 3.4·3.7b). `client_values`가 모든 `\037`을 구분자로 바꿔 이름에 글자로 든 `\037`(출력은 `\\037`)이 갈라졌다. 줄에 구분자 byte가 없을 때만, `\\` 쌍을 뺀 `\037`만 바꾼다. 3.4에서 0x1F byte가 든 이름은 여전히 구분자와 같아 보인다 (3.7b는 그런 이름을 받지 않는다). 값은 tmux가 찍은 그대로 둔다. 메뉴 목록의 이름과 같다.
 
 ### 통합 테스트
 

@@ -4,12 +4,13 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 
 main() {
-  local client=$1 name
-  name=$(take_pending_name)
+  local client=$1 pending=$2 name session
+  name=$(take_pending_name "$pending")
   if [[ -z $name ]]; then
     return
   fi
-  tmux rename-session -t "$(tmux display-message -c "$client" -p '#{pane_id}')" "$name"
+  session=$(client_session "$client") || return
+  tmux rename-session -t "$session" "$name"
 }
 
 main "$@"

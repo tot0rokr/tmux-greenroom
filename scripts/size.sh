@@ -37,7 +37,7 @@ set_state() {
 }
 
 main() {
-  local action=$1 pid=$2 workspace=$3 values=() host client origin format line before step delta reopen
+  local action=$1 pid=$2 workspace=$3 values=() host client origin before step delta reopen
   local large state_width state_height width height client_width client_height
   IFS=$FIELD_SEPARATOR read -r -d '' -a values < <(read_raw_options -t "=$workspace:" \
     @greenroom_host "@greenroom_host_client_$pid" @greenroom_origin)
@@ -48,18 +48,10 @@ main() {
   # directly, or by an attach.sh older than the records.
   [[ -n $host && -n $client ]] || return 0
 
-  # display-message -c expands client formats for the most recently active
-  # client, not the given one, so the size comes from list-clients.
-  format='#{client_name}|#{client_width}|#{client_height}|#{@greenroom_size_large}'
-  format+='|#{@greenroom_size_width}|#{@greenroom_size_height}|#{@greenroom-width}'
-  format+='|#{@greenroom-height}|#{@greenroom-resize-step}'
-  while IFS= read -r line; do
-    if [[ ${line%%"|"*} == "$client" ]]; then
-      IFS='|' read -r client client_width client_height large state_width state_height \
-        width height step <<<"$line"
-      break
-    fi
-  done < <(tmux -S "$host" list-clients -F "$format")
+  IFS=$FIELD_SEPARATOR read -r -d '' client_width client_height large state_width state_height \
+    width height step < <(client_values -S "$host" "$client" '#{client_width}' '#{client_height}' \
+    '#{@greenroom_size_large}' '#{@greenroom_size_width}' '#{@greenroom_size_height}' \
+    '#{@greenroom-width}' '#{@greenroom-height}' '#{@greenroom-resize-step}')
   ((client_width > 0 && client_height > 0)) || return 0
 
   before="$large $state_width $state_height"

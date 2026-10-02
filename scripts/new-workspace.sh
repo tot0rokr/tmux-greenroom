@@ -4,15 +4,15 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 
 main() {
-  local client=$1 name origin profile pane
-  name=$(take_pending_name)
+  local client=$1 pending=$2 name origin profile session
+  name=$(take_pending_name "$pending")
   if [[ -z $name ]]; then
     return
   fi
 
   if ! tmux has-session -t "=$name" 2>/dev/null; then
-    pane=$(tmux display-message -c "$client" -p '#{pane_id}')
-    origin=$(read_raw_options -t "$pane" @greenroom_origin)
+    session=$(client_session "$client") || return
+    origin=$(read_raw_options -t "$session" @greenroom_origin)
     origin=${origin%"$FIELD_SEPARATOR"}
     origin=${origin:-$HOME}
     profile=$(get_tmux_option @greenroom_default claude)

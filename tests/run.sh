@@ -1582,6 +1582,171 @@ test_size_action_reopens_on_the_client_showing_the_popup() {
   screen_of_has h2 ' greenroom ' || fail "the second client lost its popup"
 }
 
+# --- two popups on different workspaces --------------------------------------
+
+# popups_on <workspace>...: the inner clients show exactly these workspaces.
+popups_on() {
+  [[ $(greenroom_client_session | LC_ALL=C sort | tr '\n' ' ') == "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ]]
+}
+
+inner_on() {
+  "${GREENROOM[@]}" list-clients -F '#{client_session} #{client_name}' 2>/dev/null |
+    awk -v s="$1" '$1 == s { print $2 }'
+}
+
+# The inner client whose values "display-message -c <client> -p" gives.
+display_message_client() {
+  env -u TMUX -u TMUX_PANE "${GREENROOM[@]}" display-message -c "$1" -p '#{client_name}'
+}
+
+display_message_takes() {
+  [[ $(display_message_client "$1") == "$2" ]]
+}
+
+# Types into the popup of the second client, which makes it the most recently
+# active one. Keys typed into a menu or a prompt do not count as activity.
+use_second_popup() {
+  "${HARNESS[@]}" send-keys -t h2 -l b
+  wait_for display_message_takes "$A_INNER" "$B_INNER" ||
+    fail "test setup: display-message -c $A_INNER takes the values of $(display_message_client "$A_INNER"), not $B_INNER"
+}
+
+# The first host client (harness h) shows main, from ORIGIN, and the second
+# (h2) shows two, from its own directory. Sets A_INNER and B_INNER.
+open_two_popups() {
+  mkdir -p "$WORK_DIR/client-b"
+  start_host
+  start_second_client "$WORK_DIR/client-b" || fail "second host client did not start" || return
+  open_popup || return
+  "${GREENROOM[@]}" new-session -d -s two -n claude 'sleep 600' \; set-option -g @greenroom_last two
+  "${HARNESS[@]}" send-keys -t h2 C-a g
+  wait_for popups_on main two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(workspace_origin two) == "$WORK_DIR/client-b" ]] || fail "test setup: origin of two: $(workspace_origin two)" || return
+  A_INNER=$(inner_on main)
+  B_INNER=$(inner_on two)
+}
+
+test_workspace_menu_marks_and_kills_the_workspace_of_its_own_popup() {
+  open_two_popups || return
+  use_second_popup || return
+  # As when the key of the second popup lands while the job of the menu key
+  # of the first one starts.
+  "${GREENROOM[@]}" run-shell -b "$(sh_quote "$REPO_DIR/scripts/workspace-menu.sh") $(sh_quote "$A_INNER")"
+  wait_for screen_has 'Kill workspace' || fail "workspace menu not shown on the first client" || return
+  { screen_has 'main (1) *' && ! screen_has 'two (1) *'; } ||
+    fail "marked: $(screen | grep -oE '[a-z]+ \(1\) \*' | tr '\n' ' ')" || return
+  ! screen_of_has h2 'Kill workspace' || fail "workspace menu shown on the second client" || return
+  press x
+  wait_for screen_has 'kill workspace main?' || fail "confirmation not shown for main" || return
+  press y
+  wait_for popups_on two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  ! "${GREENROOM[@]}" has-session -t =main 2>/dev/null || fail "main still exists" || return
+  screen_of_has h2 ' greenroom ' || fail "the second client lost its popup"
+}
+
+test_workspace_menu_renames_the_workspace_of_its_own_popup() {
+  open_two_popups || return
+  press C-a G
+  wait_for screen_has 'Rename workspace' || fail "workspace menu not shown" || return
+  use_second_popup || return
+  press r
+  wait_for screen_has 'rename workspace:' || fail "rename prompt not shown" || return
+  press C-u
+  type_text 'renamed'
+  press Enter
+  wait_for popups_on renamed two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_on renamed) == "$A_INNER" ]] || fail "renamed is on $(inner_on renamed), not $A_INNER"
+}
+
+test_workspace_menu_new_workspace_takes_the_origin_of_its_own_popup() {
+  open_two_popups || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  use_second_popup || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text 'fresh'
+  press Enter
+  wait_for popups_on fresh two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_on fresh) == "$A_INNER" ]] || fail "fresh is on $(inner_on fresh), not $A_INNER" || return
+  [[ $(workspace_origin fresh) == "$ORIGIN" ]] || fail "origin of fresh: $(workspace_origin fresh)" || return
+  [[ $(pane_field fresh claude '#{pane_current_path}') == "$ORIGIN" ]] ||
+    fail "fresh cwd: $(pane_field fresh claude '#{pane_current_path}')"
+}
+
+# Links the window of main into two and shows it there, so both popups show
+# one window. tmux resolves a pane target to the most recently active session
+# that has the window.
+share_window_of_main() {
+  local window
+  window=$("${GREENROOM[@]}" display-message -p -t =main: '#{window_id}')
+  "${GREENROOM[@]}" link-window -s "$window" -t =two: \; select-window -t "=two:$window" ||
+    fail "test setup: link-window"
+}
+
+test_workspace_menu_renames_its_own_workspace_in_a_shared_window() {
+  open_two_popups || return
+  share_window_of_main || return
+  press C-a G
+  wait_for screen_has 'Rename workspace' || fail "workspace menu not shown" || return
+  use_second_popup || return
+  press r
+  wait_for screen_has 'rename workspace:' || fail "rename prompt not shown" || return
+  press C-u
+  type_text 'renamed'
+  press Enter
+  wait_for popups_on renamed two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_on renamed) == "$A_INNER" ]] || fail "renamed is on $(inner_on renamed), not $A_INNER"
+}
+
+test_workspace_menu_new_workspace_takes_its_own_origin_in_a_shared_window() {
+  open_two_popups || return
+  share_window_of_main || return
+  press C-a G
+  wait_for screen_has 'New workspace' || fail "workspace menu not shown" || return
+  use_second_popup || return
+  press n
+  wait_for screen_has 'new workspace:' || fail "name prompt not shown" || return
+  type_text 'fresh'
+  press Enter
+  wait_for popups_on fresh two || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(workspace_origin fresh) == "$ORIGIN" ]] || fail "origin of fresh: $(workspace_origin fresh)"
+}
+
+test_workspace_prompts_confirmed_together_keep_their_names() {
+  open_two_popups || return
+  press C-a G
+  wait_for screen_has 'Rename workspace' || fail "workspace menu not shown on the first client" || return
+  press r
+  wait_for screen_has 'rename workspace:' || fail "rename prompt not shown on the first client" || return
+  press C-u
+  type_text 'froma'
+  "${HARNESS[@]}" send-keys -t h2 C-a G
+  wait_for screen_of_has h2 'Rename workspace' || fail "workspace menu not shown on the second client" || return
+  "${HARNESS[@]}" send-keys -t h2 r
+  wait_for screen_of_has h2 'rename workspace:' || fail "rename prompt not shown on the second client" || return
+  "${HARNESS[@]}" send-keys -t h2 C-u \; send-keys -t h2 -l fromb
+  wait_for screen_has 'workspace: froma' || fail "first name not typed" || return
+  wait_for screen_of_has h2 'workspace: fromb' || fail "second name not typed" || return
+  "${HARNESS[@]}" send-keys -t h Enter \; send-keys -t h2 Enter
+  wait_for popups_on froma fromb || fail "popups on: $(greenroom_client_session | tr '\n' ' ')" || return
+  [[ $(inner_on froma) == "$A_INNER" ]] || fail "froma is on $(inner_on froma), not $A_INNER"
+}
+
+# tmux prints a backslash as \\, and tmux 3.4 the field separator as \037.
+test_workspace_menu_shows_a_name_with_a_literal_separator_escape() {
+  local printed
+  start_host
+  open_popup || return
+  "${GREENROOM[@]}" rename-session -t =main 'a\037b'
+  printed=$("${GREENROOM[@]}" list-sessions -F '#{session_name}')
+  press C-a G
+  wait_for screen_has 'Kill workspace' || fail "workspace menu not shown" || return
+  press x
+  wait_for screen_has "kill workspace $printed?" ||
+    fail "confirmation: $(screen | grep -F 'kill workspace')"
+}
+
 # --- runner ------------------------------------------------------------------
 
 run() {

@@ -6,18 +6,21 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers.sh"
 MAX_NUMBERED=9
 
 # The typed name goes through an option, never through a shell command line.
+# The option is per client, so two popups confirming at once keep their names.
 prompt_item() {
   local label=$1 key=$2 prompt=$3 initial=$4 script=$5 template
-  template="set-option -g @greenroom_pending \"%%%\" ; run-shell -b $(quote "$(quote "$SCRIPTS_DIR/$script") $(quote "$CLIENT")")"
+  template="set-option -g $(quote "$PENDING") \"%%%\" ; run-shell -b $(quote "$(quote "$SCRIPTS_DIR/$script") $(quote "$CLIENT") $(quote "$PENDING")")"
   ITEMS+=("$label" "$key" "$(format_escape "command-prompt -I $(quote "$initial") -p $(quote "$prompt") $(quote "$template")")")
 }
 
 main() {
-  local current id name windows label key i=0
+  local pid current current_name id name windows label key i=0
   CLIENT=$1
   ITEMS=()
+  IFS=$FIELD_SEPARATOR read -r -d '' pid current current_name < <(client_values "$CLIENT" \
+    '#{client_pid}' '#{session_id}' '#{session_name}')
+  PENDING=@greenroom_pending_$pid
   # Session IDs start with '$', which tmux 3.4 escapes in command output.
-  current=$(tmux display-message -c "$CLIENT" -p '#{session_id}')
   current=${current//\\/}
 
   while IFS=$'\t' read -r id name windows; do
@@ -30,11 +33,10 @@ main() {
     ITEMS+=("$(format_escape "$label")" "$key" "$(format_escape "switch-client -t $(quote "$id")")")
   done < <(tmux list-sessions -F "#{session_id}$(printf '\t')#{session_name}$(printf '\t')#{session_windows}")
 
-  name=$(tmux display-message -c "$CLIENT" -p '#{session_name}')
   ITEMS+=('')
   prompt_item 'New workspace' n 'new workspace:' '' new-workspace.sh
-  prompt_item 'Rename workspace' r 'rename workspace:' "$name" rename-workspace.sh
-  ITEMS+=('Kill workspace' x "$(format_escape "confirm-before -p $(quote "kill workspace $name? (y/n)") $(quote "kill-session -t $(quote "$current")")")")
+  prompt_item 'Rename workspace' r 'rename workspace:' "$current_name" rename-workspace.sh
+  ITEMS+=('Kill workspace' x "$(format_escape "confirm-before -p $(quote "kill workspace $current_name? (y/n)") $(quote "kill-session -t $(quote "$current")")")")
 
   tmux display-menu -c "$CLIENT" -T '#[align=centre] workspaces ' -x C -y C "${ITEMS[@]}"
 }
